@@ -173,6 +173,12 @@ ruta_mapeos_wnd = "src/models/jj/wnd_mappings.pkl"
 modelo_wnd = None
 wnd_mappings = None
 
+# --- Content-Based (TF-IDF) ---
+ruta_tfidf_mat = "src/models/jj/modelo_4_matriz.pkl"
+ruta_tfidf_idx = "src/models/jj/modelo_4_indices.pkl"
+modelo_tfidf_mat = None
+modelo_tfidf_idx = None
+
 
 @app.on_event("startup")
 def cargar_modelo_al_arrancar():
@@ -182,6 +188,7 @@ def cargar_modelo_al_arrancar():
     """
     global modelo_svd, df_ratings_ia, df_catalogo
     global modelo_knn, modelo_wnd, wnd_mappings
+    global modelo_tfidf_mat, modelo_tfidf_idx
 
     # --- Modelo 1: SVD ---
     if os.path.exists(ruta_modelo_svd):
@@ -239,6 +246,19 @@ def cargar_modelo_al_arrancar():
         print(
             f"[WnD Startup] Saltando Wide&Deep: TORCH={TORCH_DISPONIBLE}, modelo_class={WideAndDeepModel}"
         )
+
+    # --- Modelo 4: Content-Based ---
+    if os.path.exists(ruta_tfidf_mat) and os.path.exists(ruta_tfidf_idx):
+        try:
+            with open(ruta_tfidf_mat, "rb") as f:
+                modelo_tfidf_mat = pickle.load(f)
+            with open(ruta_tfidf_idx, "rb") as f:
+                modelo_tfidf_idx = pickle.load(f)
+            print("Modelo TF-IDF cargado correctamente.")
+        except Exception as e:
+            print(f"Error cargando TF-IDF: {e}")
+    else:
+        print(f"No se encontró el modelo TF-IDF en {ruta_tfidf_mat}")
 
     # --- Datos compartidos: Ratings y Catálogo ---
     if os.path.exists(ruta_ratings):
@@ -454,3 +474,58 @@ def recomendar_wnd_endpoint(user_id: int, n: int = 10):
     enriquecer_recomendaciones(top_n)
 
     return {"recomendaciones": top_n, "modelo": "Wide&Deep"}
+
+##############################################################################################
+#  Recomendación Modelo 4: Content-Based / Cold Start
+##############################################################################################
+
+@app.get("/recomendar/content/{user_id}")
+def recomendar_content_endpoint(user_id: int, n: int = 10):
+    if modelo_tfidf_mat is None or modelo_tfidf_idx is None:
+        raise HTTPException(status_code=503, detail="Modelo TF-IDF no cargado.")
+    if df_ratings_ia is None or df_catalogo is None:
+        raise HTTPException(status_code=503, detail="Datos no cargados.")
+
+    user_ratings = df_ratings_ia[df_ratings_ia["userId"] == user_id]
+    
+    # Cold Start (Usuario sin historial)
+    if user_ratings.empty:
+        # Recomendamos por popularidad general
+        if "vote_count" in df_catalogo.columns:
+            top_pop = df_catalogo[df_catalogo["vote_count"] > 100].sort_values(by="vote_average", ascending=False).head(n)
+        else:
+            top_pop = df_catalogo.head(n)
+            
+        recomendaciones = []
+        for idx, row in top_pop.iterrows():
+            recomendaciones.append({"tmdb_id": int(row["tmdb_id"]), "predicted_rating": 4.5})
+            
+        enriquecer_recomendaciones(recomendaciones)
+        return {"recomendaciones": recomendaciones, "modelo": "TF-IDF (Cold Start Populares)"}
+
+    # Usuario con historial -> Content-Based por similitud
+    fav = user_ratings.sort_values(by="rating", ascending=False).iloc[0]
+    tid_fav = int(fav["tmdb_id"])
+    
+    if tid_fav not in modelo_tfidf_idx:
+        return {"recomendaciones": [], "modelo": "Content-Based", "mensaje": "Película favorita no encontrada."}
+        
+    idx_fav = modelo_tfidf_idx[tid_fav]
+    vector_fav = modelo_tfidf_mat[idx_fav]
+    
+    from sklearn.metrics.pairwise import linear_kernel
+    similitudes = linear_kernel(vector_fav, modelo_tfidf_mat).flatten()
+    
+    # Obtenemos los mas similares (ignorando el mismisimo 1.0)
+    top_indices = similitudes.argsort()[::-1][1:n+1]
+    
+    predicciones = []
+    for idx_sim in top_indices:
+        peli = df_catalogo.iloc[idx_sim]
+        score_sim = similitudes[idx_sim]
+        # Creamos un rating visual combinando su rating original con la similitud
+        pseudo_rating = min(5.0, fav['rating'] * (0.8 + 0.2 * score_sim))
+        predicciones.append({"tmdb_id": int(peli["tmdb_id"]), "predicted_rating": round(pseudo_rating, 2)})
+        
+    enriquecer_recomendaciones(predicciones)
+    return {"recomendaciones": predicciones, "modelo": "Content-Based"}

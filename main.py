@@ -3,7 +3,6 @@ import time
 import os
 import sys
 
-
 def main():
     # 1. Lanzar el Backend (FastAPI)
     backend = subprocess.Popen(["uvicorn", "src.api.main_api:app", "--reload"])

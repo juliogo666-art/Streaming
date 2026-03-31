@@ -295,7 +295,7 @@ if __name__ == "__main__":
             # Truncamos títulos largos para que queden bonitos
             if len(titulo) > 42:
                 titulo = titulo[:39] + "..."
-            print(f"  {i:<5} {titulo:<45} ⭐ {rec['predicted_rating']}")
+            print(f"  {i:<5} {titulo:<45} - estrellas - {rec['predicted_rating']}")
     except Exception:
         # Si no tenemos el catálogo, mostramos solo los IDs
         for i, rec in enumerate(recomendaciones, 1):

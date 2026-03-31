@@ -129,24 +129,6 @@ else:
         df_movies = pd.DataFrame()
         df_shows = pd.DataFrame()
 
-        # Leemos solo algunas columnas para no colapsar la memoria de Streamlit
-        cols_movies = [
-            "tmdb_id",
-            "titulo",
-            "overview",
-            "fecha_estreno",
-            "poster_path",
-            "vote_average",
-        ]
-        cols_shows = [
-            "tmdb_id",
-            "titulo",
-            "overview",
-            "first_air_date",
-            "poster_path",
-            "vote_average",
-        ]
-
         if os.path.exists(movies_path):
             try:
                 df_movies = pd.read_csv(

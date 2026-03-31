@@ -138,7 +138,9 @@ else:
         else:
             st.sidebar.error("Error al conectar con el Backend")
 
-    tab1, tab2 = st.tabs(["Gestión de Usuarios", "Análisis Exploratorio (EDA)"])
+    tab1, tab2, tab3 = st.tabs(
+        ["Gestión de Usuarios", "Análisis Exploratorio (EDA)", "Rendimiento Modelos IA"]
+    )
 
     with tab1:
         st.subheader("Listado de Usuarios (Sincronizados)")
@@ -225,3 +227,57 @@ else:
 
             except Exception as e:
                 st.error(f"Error al procesar datos para EDA: {e}")
+
+    with tab3:
+        st.subheader("Evaluación Comparativa de Modelos de Recomendación")
+        metricas_path = "src/utils/metricas_ranking.csv"
+
+        if os.path.exists(metricas_path):
+            df_metricas = pd.read_csv(metricas_path)
+
+            # Formatear porcentajes para la tabla
+            st.markdown("### Tabla de Resultados (Métricas de Ranking Offline)")
+            st.dataframe(df_metricas, use_container_width=True)
+
+            st.divider()
+
+            # Extraer K dinámicamente de los nombres de columna (ej. NDCG_10)
+            ndcg_col = [c for c in df_metricas.columns if "NDCG" in c][0]
+            prec_col = [c for c in df_metricas.columns if "Precision" in c][0]
+
+            col1, col2 = st.columns(2)
+
+            with col1:
+                st.markdown(f"**Comparativa de {ndcg_col}** (Calidad de ordenación)")
+                fig_ndcg, ax_ndcg = plt.subplots(figsize=(8, 5))
+                sns.barplot(
+                    x="Modelo",
+                    y=ndcg_col,
+                    data=df_metricas,
+                    palette="Blues_d",
+                    ax=ax_ndcg,
+                )
+                st.pyplot(fig_ndcg)
+
+            with col2:
+                st.markdown(f"**Comparativa de {prec_col}** (Acierto en Top-K)")
+                fig_prec, ax_prec = plt.subplots(figsize=(8, 5))
+                sns.barplot(
+                    x="Modelo",
+                    y=prec_col,
+                    data=df_metricas,
+                    palette="Greens_d",
+                    ax=ax_prec,
+                )
+                st.pyplot(fig_prec)
+
+            st.info(
+                "**NDCG** mide la calidad matemática del orden exacto (Si tu favorita sale #1 suma más que si sale #10)"
+            )
+            st.info(
+                "**Precision** mide el porcentaje bruto de películas relevantes sugeridas."
+            )
+        else:
+            st.info(
+                "No hay datos de evaluación disponibles. El administrador de la IA debe ejecutar el script `evaluacion_ranking.py` primero."
+            )

@@ -2,7 +2,7 @@
 #######################################################################################
 # SCRIPT DE EVALUACIÓN DE RANKING (NDCG K, Precision K, Hit Rate)
 # =======================================================================================
-# Compara los 4 modelos (SVD, KNN, W&D, Content-Based) sobre un conjunto de usuarios.
+# Compara los modelos (SVD, KNN, W&D, Content-Based, LightFM) sobre un conjunto de usuarios.
 # Oculta películas que el usuario ha valorado positivamente (relevantes) y comprueba
 # si el modelo logra sugerirlas en su Top 10.
 #######################################################################################
@@ -29,6 +29,8 @@ RUTA_WND_MAP = "src/models/jj/wnd_mappings.pkl"
 RUTA_TFIDF_MOD = "src/models/jj/modelo_4_tfidf.pkl"
 RUTA_TFIDF_MAT = "src/models/jj/modelo_4_matriz.pkl"
 RUTA_TFIDF_IDX = "src/models/jj/modelo_4_indices.pkl"
+RUTA_IMP_MOD = "src/models/jj/modelo_5_implicit.pkl"
+RUTA_IMP_DAT = "src/models/jj/modelo_5_implicit_dataset.pkl"
 
 # Guardar Resultados
 RUTA_RESULTADOS = "src/utils/metricas_ranking.csv"
@@ -51,6 +53,24 @@ def precision_at_k(recomendadas, relevantes):
         return 0.0
     aciertos = len(set(recomendadas) & set(relevantes))
     return aciertos / len(recomendadas)
+
+
+def recall_at_k(recomendadas, relevantes):
+    """De todas las películas relevantes, ¿qué % logró capturar el Top K?"""
+    if not relevantes:
+        return 0.0
+    aciertos = len(set(recomendadas) & set(relevantes))
+    return aciertos / len(relevantes)
+
+
+def coverage(recs_totales, n_catalogo):
+    """Porcentaje del catálogo total que nuestro sistema es capaz de recomendar."""
+    if n_catalogo == 0:
+        return 0.0
+    unicas_recomendadas = set()
+    for lista in recs_totales:
+        unicas_recomendadas.update(lista)
+    return len(unicas_recomendadas) / n_catalogo
 
 
 ############################################################################################
@@ -138,6 +158,16 @@ def cargar_modelos():
         except Exception as e:
             print(f"  Error cargando W&D: {e}")
 
+    # Implicit BPR
+    if os.path.exists(RUTA_IMP_MOD) and os.path.exists(RUTA_IMP_DAT):
+        try:
+            with open(RUTA_IMP_MOD, "rb") as f:
+                modelos["IMP"] = pickle.load(f)
+            with open(RUTA_IMP_DAT, "rb") as f:
+                modelos["IMP_DAT"] = pickle.load(f)
+        except Exception as e:
+            print(f"  Error cargando Implicit: {e}")
+
     print(f"  Modelos listos: {list(modelos.keys())}")
     return modelos
 
@@ -214,6 +244,46 @@ def predecir_content(matriz, indices, df_movies, user_ratings_vistas, candidatas
     return [p[0] for p in preds_sims[:K]]
 
 
+def predecir_implicit(modelo, dataset, user_id, test_vistas_ratings, candidatas):
+    """
+    Predicción usando el modelo de la librería `implicit`.
+    """
+    user2idx = dataset["user2idx"]
+    item2idx = dataset["item2idx"]
+    
+    if user_id not in user2idx:
+        return []
+        
+    u_idx = user2idx[user_id]
+    
+    # Preparamos las candidatas soportadas (que están en el catálogo entrenado)
+    cands_validas = [(tid, item2idx[tid]) for tid in candidatas if tid in item2idx]
+    if not cands_validas:
+        return []
+        
+    # Implicit tiene el parámetro `item_idxs` en `recommend` en sus versiones recientes,
+    # pero para mayor seguridad, vamos a usar `recommend` limitando o extrayendo a mano los scores
+    # O, lo más estándar: pedir muchas y filtrar. Pero `predict` es más fácil:
+    # `scores = model.user_factors[u] @ model.item_factors.T`
+    
+    tids, m_idxs = zip(*cands_validas)
+    
+    # En implicit, predecir el score es producto escalar del factor de usuario con el factor de item
+    u_factors = np.asarray(modelo.user_factors)[u_idx]
+    
+    # Si las dimensiones son compatibles:
+    if hasattr(modelo, "item_factors"):
+        i_factors = np.asarray(modelo.item_factors)[list(m_idxs)]
+        # Producto escalar para obtener los scores brutos
+        scores = np.dot(i_factors, u_factors)
+        
+        pares = list(zip(tids, scores))
+        pares.sort(key=lambda x: x[1], reverse=True)
+        return [p[0] for p in pares[:K]]
+    else:
+        return []
+
+
 ############################################################################################
 
 
@@ -243,12 +313,22 @@ def evaluar():
     u_abundantes = conteos[conteos > 30].index.tolist()
     u_evaluar = np.random.choice(u_abundantes, NUM_USUARIOS, replace=False)
 
+    # Inicializamos contadores por cada modelo
+    # 'p' = precision, 'r' = recall, 'n' = ndcg, 'h' = hit_rate, 'recs' = lista todas recs (para coverage)
+    metricas_base = {"p": 0, "r": 0, "n": 0, "h": 0, "recs": []}
     resultados = {
-        "SVD": {"p": 0, "n": 0, "h": 0},
-        "KNN": {"p": 0, "n": 0, "h": 0},
-        "WND": {"p": 0, "n": 0, "h": 0},
-        "TFIDF": {"p": 0, "n": 0, "h": 0},
+        "SVD": metricas_base.copy() if "SVD" in modelos else None,
+        "KNN": metricas_base.copy() if "KNN" in modelos else None,
+        "WND": metricas_base.copy() if "WND" in modelos else None,
+        "TFIDF": metricas_base.copy() if "TFIDF_MAT" in modelos else None,
+        "IMP": metricas_base.copy() if "IMP" in modelos else None,
     }
+    # Reset lists inside dicts (importante por .copy() superficial)
+    for k in resultados:
+        if resultados[k] is not None:
+            resultados[k] = {"p": 0, "r": 0, "n": 0, "h": 0, "recs": []}
+
+    n_usuarios_final = 0
 
     print(f"\n  Iniciando evaluación sobre {NUM_USUARIOS} usuarios...")
 
@@ -274,26 +354,35 @@ def evaluar():
         candidatas = todas_pelis - set(vistas["tmdb_id"].unique())
 
         # Evaluate SVD
-        if "SVD" in modelos:
+        top_svd = []
+        if resultados["SVD"] is not None:
             top_svd = predecir_svd_knn(modelos["SVD"], u, candidatas)
             resultados["SVD"]["p"] += precision_at_k(top_svd, pelis_relevantes)
+            resultados["SVD"]["r"] += recall_at_k(top_svd, pelis_relevantes)
             resultados["SVD"]["n"] += ndcg_at_k(top_svd, dict_relevantes)
             resultados["SVD"]["h"] += hit_rate(top_svd, pelis_relevantes)
+            resultados["SVD"]["recs"].append(top_svd)
 
         # Evaluate KNN
-        if "KNN" in modelos:
+        top_knn = []
+        if resultados["KNN"] is not None:
             top_knn = predecir_svd_knn(modelos["KNN"], u, candidatas)
             resultados["KNN"]["p"] += precision_at_k(top_knn, pelis_relevantes)
+            resultados["KNN"]["r"] += recall_at_k(top_knn, pelis_relevantes)
             resultados["KNN"]["n"] += ndcg_at_k(top_knn, dict_relevantes)
             resultados["KNN"]["h"] += hit_rate(top_knn, pelis_relevantes)
+            resultados["KNN"]["recs"].append(top_knn)
 
         # Evaluate W&D
-        if "WND" in modelos:
+        top_wnd = []
+        if resultados["WND"] is not None:
             top_wnd = predecir_wnd(modelos["WND"], modelos["WND_MAPS"], u, candidatas)
             if top_wnd:
                 resultados["WND"]["p"] += precision_at_k(top_wnd, pelis_relevantes)
+                resultados["WND"]["r"] += recall_at_k(top_wnd, pelis_relevantes)
                 resultados["WND"]["n"] += ndcg_at_k(top_wnd, dict_relevantes)
                 resultados["WND"]["h"] += hit_rate(top_wnd, pelis_relevantes)
+                resultados["WND"]["recs"].append(top_wnd)
 
         # Evaluate Content-Based
         if "TFIDF_MAT" in modelos:
@@ -305,33 +394,66 @@ def evaluar():
                 candidatas,
             )
             resultados["TFIDF"]["p"] += precision_at_k(top_tf, pelis_relevantes)
+            resultados["TFIDF"]["r"] += recall_at_k(top_tf, pelis_relevantes)
             resultados["TFIDF"]["n"] += ndcg_at_k(top_tf, dict_relevantes)
             resultados["TFIDF"]["h"] += hit_rate(top_tf, pelis_relevantes)
+            resultados["TFIDF"]["recs"].append(top_tf)
+
+        # Evaluate Implicit BPR
+        top_imp = []
+        if resultados["IMP"] is not None:
+            top_imp = predecir_implicit(
+                modelos["IMP"], modelos["IMP_DAT"], u, vistas, candidatas
+            )
+            if top_imp:
+                resultados["IMP"]["p"] += precision_at_k(top_imp, pelis_relevantes)
+                resultados["IMP"]["r"] += recall_at_k(top_imp, pelis_relevantes)
+                resultados["IMP"]["n"] += ndcg_at_k(top_imp, dict_relevantes)
+                resultados["IMP"]["h"] += hit_rate(top_imp, pelis_relevantes)
+                resultados["IMP"]["recs"].append(top_imp)
+
+        # Solo si procesamos un usuario válido, aumentamos el contador
+        if (
+            top_svd
+            or top_knn
+            or top_wnd
+            or top_tf
+            or (resultados.get("IMP") and top_imp)
+        ):
+            n_usuarios_final += 1
 
     # Convertir sumas a medias --> Dividimos entre N usuarios testados válidos
-    print("\n" + "=" * 60)
-    print(f"  RESULTADOS GLOBALES (Promedios para Top-{K}):")
-    print("=" * 60)
+    n_catalogo = len(todas_pelis)
+    print("\n" + "=" * 80)
+    print(
+        f"  RESULTADOS GLOBALES (Promedios para Top-{K} sobre {n_usuarios_final} usuarios):"
+    )
+    print("=" * 80)
 
     records = []
     for mod, vals in resultados.items():
-        if vals["n"] == 0 and mod != "WND":
-            continue  # Saltamos los no evaluados
+        if vals is None or not vals["recs"]:
+            continue
 
-        prec = vals["p"] / NUM_USUARIOS
-        ndcg = vals["n"] / NUM_USUARIOS
-        hr = vals["h"] / NUM_USUARIOS
+        prec = vals["p"] / n_usuarios_final
+        rec = vals["r"] / n_usuarios_final
+        ndcg = vals["n"] / n_usuarios_final
+        hr = vals["h"] / n_usuarios_final
+        cov = coverage(vals["recs"], n_catalogo)
 
         records.append(
             {
                 "Modelo": mod,
                 f"Precision_{K}": prec,
+                f"Recall_{K}": rec,
                 f"NDCG_{K}": ndcg,
                 f"Hit_Rate_{K}": hr,
+                f"Coverage_{K}": cov,
             }
         )
         print(
-            f"  -> {mod:<8} | Precision: {prec * 100:04.1f}% | NDCG: {ndcg:.4f} | HR: {hr * 100:04.1f}%"
+            f"  -> {mod:<8} | Precision: {prec * 100:4.1f}% | Recall: {rec * 100:4.1f}% | "
+            f"NDCG: {ndcg:.4f} | HR: {hr * 100:4.1f}% | Cov: {cov * 100:4.1f}%"
         )
 
     # Guardar a CSV

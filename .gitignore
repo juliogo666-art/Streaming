@@ -229,6 +229,8 @@ src/data/ready/*.csv
 # Modelos entrenados (pesan demasiado para GitHub, se regeneran con los scripts)
 *.pkl
 *.pth
+*.joblib
+*.onnx
 
 # Acciones de maquina para verificar
 machine_check/

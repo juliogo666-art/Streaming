@@ -9,31 +9,16 @@ import bcrypt
 import pickle
 import os
 
-# --- Wide & Deep: importamos PyTorch si está disponible (opcional) ---
+import joblib
+
 try:
-    import torch
+    import onnxruntime as ort
 
-    try:
-        from networks.dl.rn_mlp import WideAndDeepModel
-
-        print("[WnD] WideAndDeepModel importado desde 'networks.dl.rn_mlp'")
-    except ImportError as e1:
-        print(f"[WnD] Import 1 fallido: {e1}")
-        try:
-            from src.networks.dl.rn_mlp import WideAndDeepModel
-
-            print("[WnD] WideAndDeepModel importado desde 'src.networks.dl.rn_mlp'")
-        except ImportError as e2:
-            print(f"[WnD] Import 2 fallido: {e2} -> WideAndDeepModel = None")
-            WideAndDeepModel = None
-    TORCH_DISPONIBLE = True
-    print(
-        f"[WnD] PyTorch {torch.__version__} disponible. WideAndDeepModel={'OK' if WideAndDeepModel else 'None'}"
-    )
+    ONNX_DISPONIBLE = True
+    print(f"[WnD] ONNX Runtime {ort.__version__} disponible.")
 except ImportError as e:
-    print(f"[WnD] PyTorch no instalado: {e}")
-    TORCH_DISPONIBLE = False
-    WideAndDeepModel = None
+    print(f"[WnD] onnxruntime no instalado: {e}")
+    ONNX_DISPONIBLE = False
 
 app = FastAPI()
 
@@ -154,7 +139,7 @@ def login(datos: LoginRequest):
 ##############################################################################################
 
 # Ruta al modelo SVD entrenado y al CSV de ratings, para saber qué pelis ya ha visto el usuario.
-ruta_modelo_svd = "src/models/jj/modelo_1_SVD.pkl"
+ruta_modelo_svd = "src/models/jj/modelo_1_SVD.joblib"
 ruta_ratings = "src/data/ready/ratings_finales_ia.csv"
 ruta_catalogo = "src/data/ready/dataset_final_movies.csv"
 
@@ -164,20 +149,26 @@ df_ratings_ia = None
 df_catalogo = None
 
 # --- KNN + Cosine Similarity ---
-ruta_modelo_knn = "src/models/jj/modelo_2_knn_cs.pkl"
+ruta_modelo_knn = "src/models/jj/modelo_2_knn_cs.joblib"
 modelo_knn = None
 
-# --- Wide & Deep (PyTorch) ---
-ruta_modelo_wnd = "src/models/jj/modelo_3_wnd.pth"
+# --- Wide & Deep (ONNX) ---
+ruta_modelo_wnd = "src/models/jj/modelo_3_wnd.onnx"
 ruta_mapeos_wnd = "src/models/jj/wnd_mappings.pkl"
 modelo_wnd = None
 wnd_mappings = None
 
 # --- Content-Based (TF-IDF) ---
-ruta_tfidf_mat = "src/models/jj/modelo_4_matriz.pkl"
-ruta_tfidf_idx = "src/models/jj/modelo_4_indices.pkl"
+ruta_tfidf_mat = "src/models/jj/modelo_4_matriz.joblib"
+ruta_tfidf_idx = "src/models/jj/modelo_4_indices.joblib"
 modelo_tfidf_mat = None
 modelo_tfidf_idx = None
+
+# --- Implicit BPR ---
+ruta_imp_mod = "src/models/jj/modelo_5_implicit.pkl"
+ruta_imp_dat = "src/models/jj/modelo_5_implicit_dataset.pkl"
+modelo_imp = None
+modelo_imp_dat = None
 
 
 @app.on_event("startup")
@@ -189,28 +180,25 @@ def cargar_modelo_al_arrancar():
     global modelo_svd, df_ratings_ia, df_catalogo
     global modelo_knn, modelo_wnd, wnd_mappings
     global modelo_tfidf_mat, modelo_tfidf_idx
+    global modelo_imp, modelo_imp_dat
 
     # --- Modelo 1: SVD ---
     if os.path.exists(ruta_modelo_svd):
-        with open(ruta_modelo_svd, "rb") as f:
-            modelo_svd = pickle.load(f)
-        print("Modelo SVD cargado correctamente.")
+        modelo_svd = joblib.load(ruta_modelo_svd)
+        print("Modelo SVD cargado correctamente (Joblib).")
     else:
         print(f"No se encontró el modelo SVD en {ruta_modelo_svd}")
 
     # --- Modelo 2: KNN + Cosine Similarity ---
     if os.path.exists(ruta_modelo_knn):
-        with open(ruta_modelo_knn, "rb") as f:
-            modelo_knn = pickle.load(f)
-        print("Modelo KNN+Cosine cargado correctamente.")
+        modelo_knn = joblib.load(ruta_modelo_knn)
+        print("Modelo KNN+Cosine cargado (Joblib).")
     else:
         print(f"No se encontró el modelo KNN en {ruta_modelo_knn}")
 
-    # --- Modelo 3: Wide & Deep (PyTorch) ---
-    print(
-        f"[WnD Startup] TORCH_DISPONIBLE={TORCH_DISPONIBLE}, WideAndDeepModel={WideAndDeepModel}"
-    )
-    if TORCH_DISPONIBLE and WideAndDeepModel is not None:
+    # --- Modelo 3: Wide & Deep (ONNX) ---
+    print(f"[WnD Startup] ONNX_DISPONIBLE={ONNX_DISPONIBLE}")
+    if ONNX_DISPONIBLE:
         if os.path.exists(ruta_modelo_wnd) and os.path.exists(ruta_mapeos_wnd):
             try:
                 with open(ruta_mapeos_wnd, "rb") as f:
@@ -218,47 +206,45 @@ def cargar_modelo_al_arrancar():
                 num_users = len(wnd_mappings["user2idx"])
                 num_movies = len(wnd_mappings["movie2idx"])
                 print(
-                    f"[WnD Startup] Mappings: {num_users} usuarios, {num_movies} peliculas"
+                    f"[ONNX Startup] Mappings WnD: {num_users} users, {num_movies} movies"
                 )
-                modelo_wnd = WideAndDeepModel(
-                    num_users=num_users,
-                    num_movies=num_movies,
-                    embedding_dim=32,
-                    hidden_layers=[64, 32],
+
+                # Cargamos la sesión de inferencia de ONNX
+                modelo_wnd = ort.InferenceSession(
+                    ruta_modelo_wnd, providers=["CPUExecutionProvider"]
                 )
-                modelo_wnd.load_state_dict(
-                    torch.load(
-                        ruta_modelo_wnd,
-                        map_location=torch.device("cpu"),
-                        weights_only=True,
-                    )
-                )
-                modelo_wnd.eval()
-                print("Modelo Wide&Deep cargado correctamente.")
+                print("Modelo Wide&Deep ONNX cargado correctamente.")
             except Exception as e:
-                print(f"[WnD Startup] ERROR al cargar el modelo: {e}")
+                print(f"ERROR al cargar el modelo: {e}")
                 modelo_wnd = None
         else:
-            print(
-                f"[WnD Startup] Archivos no encontrados: .pth existe={os.path.exists(ruta_modelo_wnd)}, .pkl existe={os.path.exists(ruta_mapeos_wnd)}"
-            )
+            print(f"Archivos no encontrados para WnD.")
     else:
-        print(
-            f"[WnD Startup] Saltando Wide&Deep: TORCH={TORCH_DISPONIBLE}, modelo_class={WideAndDeepModel}"
-        )
+        print("Saltando Wide&Deep porque onnxruntime no está instalado.")
 
     # --- Modelo 4: Content-Based ---
     if os.path.exists(ruta_tfidf_mat) and os.path.exists(ruta_tfidf_idx):
         try:
-            with open(ruta_tfidf_mat, "rb") as f:
-                modelo_tfidf_mat = pickle.load(f)
-            with open(ruta_tfidf_idx, "rb") as f:
-                modelo_tfidf_idx = pickle.load(f)
-            print("Modelo TF-IDF cargado correctamente.")
+            modelo_tfidf_mat = joblib.load(ruta_tfidf_mat)
+            modelo_tfidf_idx = joblib.load(ruta_tfidf_idx)
+            print("Modelo TF-IDF cargado correctamente (Joblib).")
         except Exception as e:
             print(f"Error cargando TF-IDF: {e}")
     else:
-        print(f"No se encontró el modelo TF-IDF en {ruta_tfidf_mat}")
+        print(f"No se encontró el modelo TF-IDF.")
+
+    # --- Modelo 5: Implicit BPR ---
+    if os.path.exists(ruta_imp_mod) and os.path.exists(ruta_imp_dat):
+        try:
+            with open(ruta_imp_mod, "rb") as f:
+                modelo_imp = pickle.load(f)
+            with open(ruta_imp_dat, "rb") as f:
+                modelo_imp_dat = pickle.load(f)
+            print("Modelo Implicit cargado correctamente.")
+        except Exception as e:
+            print(f"Error cargando Implicit: {e}")
+    else:
+        print(f"No se encontró el modelo Implicit.")
 
     # --- Datos compartidos: Ratings y Catálogo ---
     if os.path.exists(ruta_ratings):
@@ -421,10 +407,10 @@ def recomendar_knn(user_id: int, n: int = 10):
 
 @app.get("/recomendar/wnd/{user_id}")
 def recomendar_wnd_endpoint(user_id: int, n: int = 10):
-    """Endpoint de recomendaciones usando Wide & Deep Neural Network (Modelo 3)."""
+    """Endpoint de recomendaciones usando Wide & Deep Neural Network (ONNX Native)."""
     if modelo_wnd is None or wnd_mappings is None:
         raise HTTPException(
-            status_code=503, detail="El modelo Wide&Deep no está cargado."
+            status_code=503, detail="El modelo Wide&Deep ONNX no está cargado."
         )
     if df_ratings_ia is None:
         raise HTTPException(
@@ -437,7 +423,7 @@ def recomendar_wnd_endpoint(user_id: int, n: int = 10):
     if user_id not in user2idx:
         return {
             "recomendaciones": [],
-            "modelo": "Wide&Deep",
+            "modelo": "Wide&Deep (ONNX)",
             "mensaje": f"El usuario {user_id} no cumplió el filtro de entrenamiento (>100 valoraciones).",
         }
 
@@ -452,20 +438,25 @@ def recomendar_wnd_endpoint(user_id: int, n: int = 10):
     if not candidatas:
         return {
             "recomendaciones": [],
-            "modelo": "Wide&Deep",
+            "modelo": "Wide&Deep (ONNX)",
             "mensaje": "Este usuario ya ha valorado todas las películas.",
         }
 
     tmdb_ids, movie_indices = zip(*candidatas)
-    user_tensor = torch.tensor([u_idx] * len(movie_indices), dtype=torch.long)
-    movie_tensor = torch.tensor(list(movie_indices), dtype=torch.long)
 
-    with torch.no_grad():
-        preds = modelo_wnd(user_tensor, movie_tensor)
-        preds = torch.clamp(preds, 0.5, 5.0)
+    # Creamos arrays NumPy en lugar de tensores PyTorch
+    user_arr = np.array([u_idx] * len(movie_indices), dtype=np.int64)
+    movie_arr = np.array(list(movie_indices), dtype=np.int64)
+
+    # Inferencia purísima en C++ (Zero Python Overhead) via ONNX Runtime
+    inputs_onnx = {"user_id": user_arr, "movie_id": movie_arr}
+    preds_onnx = modelo_wnd.run(["predicted_rating"], inputs_onnx)[0].flatten()
+
+    # Restringir predicción a rango [0.5, 5.0]
+    preds_onnx = np.clip(preds_onnx, 0.5, 5.0)
 
     predicciones = [
-        {"tmdb_id": int(tid), "predicted_rating": round(preds[i].item(), 2)}
+        {"tmdb_id": int(tid), "predicted_rating": round(float(preds_onnx[i]), 2)}
         for i, tid in enumerate(tmdb_ids)
     ]
 
@@ -473,11 +464,13 @@ def recomendar_wnd_endpoint(user_id: int, n: int = 10):
     top_n = predicciones[:n]
     enriquecer_recomendaciones(top_n)
 
-    return {"recomendaciones": top_n, "modelo": "Wide&Deep"}
+    return {"recomendaciones": top_n, "modelo": "Wide&Deep (ONNX)"}
+
 
 ##############################################################################################
 #  Recomendación Modelo 4: Content-Based / Cold Start
 ##############################################################################################
+
 
 @app.get("/recomendar/content/{user_id}")
 def recomendar_content_endpoint(user_id: int, n: int = 10):
@@ -487,45 +480,131 @@ def recomendar_content_endpoint(user_id: int, n: int = 10):
         raise HTTPException(status_code=503, detail="Datos no cargados.")
 
     user_ratings = df_ratings_ia[df_ratings_ia["userId"] == user_id]
-    
+
     # Cold Start (Usuario sin historial)
     if user_ratings.empty:
         # Recomendamos por popularidad general
         if "vote_count" in df_catalogo.columns:
-            top_pop = df_catalogo[df_catalogo["vote_count"] > 100].sort_values(by="vote_average", ascending=False).head(n)
+            top_pop = (
+                df_catalogo[df_catalogo["vote_count"] > 100]
+                .sort_values(by="vote_average", ascending=False)
+                .head(n)
+            )
         else:
             top_pop = df_catalogo.head(n)
-            
+
         recomendaciones = []
         for idx, row in top_pop.iterrows():
-            recomendaciones.append({"tmdb_id": int(row["tmdb_id"]), "predicted_rating": 4.5})
-            
+            recomendaciones.append(
+                {"tmdb_id": int(row["tmdb_id"]), "predicted_rating": 4.5}
+            )
+
         enriquecer_recomendaciones(recomendaciones)
-        return {"recomendaciones": recomendaciones, "modelo": "TF-IDF (Cold Start Populares)"}
+        return {
+            "recomendaciones": recomendaciones,
+            "modelo": "TF-IDF (Cold Start Populares)",
+        }
 
     # Usuario con historial -> Content-Based por similitud
     fav = user_ratings.sort_values(by="rating", ascending=False).iloc[0]
     tid_fav = int(fav["tmdb_id"])
-    
+
     if tid_fav not in modelo_tfidf_idx:
-        return {"recomendaciones": [], "modelo": "Content-Based", "mensaje": "Película favorita no encontrada."}
-        
+        return {
+            "recomendaciones": [],
+            "modelo": "Content-Based",
+            "mensaje": "Película favorita no encontrada.",
+        }
+
     idx_fav = modelo_tfidf_idx[tid_fav]
     vector_fav = modelo_tfidf_mat[idx_fav]
-    
+
     from sklearn.metrics.pairwise import linear_kernel
+
     similitudes = linear_kernel(vector_fav, modelo_tfidf_mat).flatten()
-    
+
     # Obtenemos los mas similares (ignorando el mismisimo 1.0)
-    top_indices = similitudes.argsort()[::-1][1:n+1]
-    
+    top_indices = similitudes.argsort()[::-1][1 : n + 1]
+
     predicciones = []
     for idx_sim in top_indices:
         peli = df_catalogo.iloc[idx_sim]
         score_sim = similitudes[idx_sim]
         # Creamos un rating visual combinando su rating original con la similitud
-        pseudo_rating = min(5.0, fav['rating'] * (0.8 + 0.2 * score_sim))
-        predicciones.append({"tmdb_id": int(peli["tmdb_id"]), "predicted_rating": round(pseudo_rating, 2)})
-        
+        pseudo_rating = min(5.0, fav["rating"] * (0.8 + 0.2 * score_sim))
+        predicciones.append(
+            {
+                "tmdb_id": int(peli["tmdb_id"]),
+                "predicted_rating": round(pseudo_rating, 2),
+            }
+        )
+
     enriquecer_recomendaciones(predicciones)
     return {"recomendaciones": predicciones, "modelo": "Content-Based"}
+
+
+##############################################################################################
+#  Recomendación Modelo 5: Implicit BPR
+##############################################################################################
+
+
+@app.get("/recomendar/implicit/{user_id}")
+def recomendar_implicit_endpoint(user_id: int, n: int = 10):
+    """Endpoint de recomendaciones usando filtrado colaborativo BPR de la librería implicit."""
+    if modelo_imp is None or modelo_imp_dat is None:
+        raise HTTPException(
+            status_code=503, detail="Modelo Implicit BPR no está cargado."
+        )
+    if df_ratings_ia is None:
+        raise HTTPException(
+            status_code=503, detail="Los datos de ratings no están disponibles."
+        )
+
+    user2idx = modelo_imp_dat["user2idx"]
+    item2idx = modelo_imp_dat["item2idx"]
+    idx2item = {v: k for k, v in item2idx.items()}
+
+    if user_id not in user2idx:
+        return {
+            "recomendaciones": [],
+            "modelo": "Implicit BPR",
+            "mensaje": f"El usuario {user_id} no tiene historial en el modelo BPR.",
+        }
+
+    u_idx = user2idx[user_id]
+
+    # Extraemos arrays nativos mediante NumPy para evitar el bug Cython de implicit.recommend() en Windows!
+    u_factors = np.asarray(modelo_imp.user_factors[u_idx])
+    i_factors = np.asarray(modelo_imp.item_factors)
+
+    # Producto escalar vectorizado (Calcula score para tooooodas las peliculas del modelo a la vez)
+    scores = u_factors.dot(i_factors.T)
+
+    # Localizamos las que ya ha visto en el dataset completo
+    pelis_vistas = set(
+        df_ratings_ia[df_ratings_ia["userId"] == user_id]["tmdb_id"].tolist()
+    )
+
+    # Forzamos su score a menos infinito para que nunca salgan en el top
+    for tid in pelis_vistas:
+        if tid in item2idx:
+            midx = item2idx[tid]
+            scores[midx] = -np.inf
+
+    # np.argsort()[::-1] ordena de mayor a menor y extraemos las top N posiciones de memoria
+    top_indices = np.argsort(scores)[::-1][:n]
+
+    predicciones = []
+    for idx_sim in top_indices:
+        tid = idx2item[idx_sim]
+        score_puro = float(scores[idx_sim])
+        # Al ser ranking BPR no devuelve nota 0-5. Reescalamos visualmente para UI amigable.
+        rating_ui = min(5.0, max(0.5, 3.5 + (score_puro * 0.2)))
+
+        predicciones.append(
+            {"tmdb_id": int(tid), "predicted_rating": round(rating_ui, 2)}
+        )
+
+    enriquecer_recomendaciones(predicciones)
+
+    return {"recomendaciones": predicciones, "modelo": "Implicit BPR"}

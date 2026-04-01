@@ -101,14 +101,15 @@ else:
     # --- SELECTOR DE MODELO DE IA ---
     modelo_ia = st.sidebar.selectbox(
         "Motor de Recomendación",
-        ["SVD (Rápido)", "KNN + Cosine (Explicable)", "Wide & Deep (Profundo)", "Content-Based (Cold-Start)"],
-        index=0,
+        ["SVD (Rápido)", "KNN + Cosine (Explicable)", "Wide & Deep (Profundo)", "Content-Based (Cold-Start)", "Implicit BPR (Ranking Top)"],
+        index=4, # Ponemos el BPR por defecto porque es el mejor
     )
     mapa_endpoints = {
         "SVD (Rápido)": "recomendar",
         "KNN + Cosine (Explicable)": "recomendar/knn",
         "Wide & Deep (Profundo)": "recomendar/wnd",
         "Content-Based (Cold-Start)": "recomendar/content",
+        "Implicit BPR (Ranking Top)": "recomendar/implicit",
     }
     endpoint_ia = mapa_endpoints[modelo_ia]
 

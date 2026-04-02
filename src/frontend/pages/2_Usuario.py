@@ -1,5 +1,6 @@
 import streamlit as st
 import requests
+import datetime
 
 st.set_page_config(page_title="SPIRE Streaming - Usuario", layout="wide")
 
@@ -8,11 +9,109 @@ if "usuario_autenticado" not in st.session_state:
     st.session_state["usuario_autenticado"] = False
     st.session_state["usuario_actual"] = None
 
-# ---- PANTALLA DE ACCESO (Login / Registro) ----
+# ---- ESTILOS PERSONALIZADOS (Azul Marino y Oro) ----
+st.markdown(
+    """
+    <style>
+    /* Fondo y colores principales */
+    .stApp {
+        background-color: #001220;
+        color: #f0f0f0;
+    }
+    
+    /* Títulos en Dorado Premium (Más profundo) */
+    h1, h2, h3, .stSubheader {
+        color: #B8860B !important;
+        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        font-weight: 700;
+        text-shadow: 1px 1px 2px rgba(0,0,0,0.5);
+    }
+    
+    /* Texto normal */
+    p, span, label {
+        color: #e0e0e0 !important;
+    }
+    
+    /* Estilo para los Tabs */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 10px;
+        background-color: rgba(0, 31, 63, 0.5);
+        padding: 10px;
+        border-radius: 10px;
+    }
+    .stTabs [data-baseweb="tab"] {
+        height: 45px;
+        background-color: transparent;
+        border-radius: 5px;
+        color: #f0f0f0;
+        border: 1px solid transparent;
+        transition: all 0.2s;
+    }
+    /* Tab seleccionado: Oro oscuro con texto azul muy oscuro para contraste */
+    .stTabs [aria-selected="true"] {
+        background-color: #B8860B !important;
+        color: #001220 !important;
+        border-color: #B8860B !important;
+        font-weight: bold;
+    }
+    
+    /* Botones Premium */
+    div.stButton > button {
+        background-color: #B8860B !important;
+        color: #001220 !important;
+        font-weight: bold !important;
+        border: 1px solid #B8860B !important;
+        border-radius: 8px !important;
+        padding: 0.6rem 2rem !important;
+        transition: all 0.3s ease !important;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+    }
+    div.stButton > button:hover {
+        background-color: #001f3f !important;
+        color: #B8860B !important;
+        transform: translateY(-2px) !important;
+        box-shadow: 0 4px 20px rgba(184, 134, 11, 0.4) !important;
+    }
+    
+    /* Inputs y widgets estilizados */
+    .stTextInput>div>div>input, .stSelectbox>div>div>div, .stMultiSelect>div>div>div, .stDateInput>div>div>input {
+        background-color: #001f3f !important;
+        color: white !important;
+        border: 1px solid #1a3a5f !important;
+        border-radius: 8px !important;
+    }
+    
+    /* Checkboxes personalizados (Grid de gustos) */
+    .stCheckbox > label > div[data-testid="stMarkdownContainer"] > p {
+        color: #f0f0f0 !important;
+        font-size: 0.9rem;
+    }
+    /* Estilo del cuadro del checkbox */
+    span[data-baseweb="checkbox"] > div {
+        border-color: #B8860B !important;
+    }
+    /* Checkbox marcado: fondo oro oscuro */
+    div[data-checked="true"] {
+        background-color: #B8860B !important;
+    }
+    
+    /* Mensajes de información y éxito */
+    .stAlert {
+        border-radius: 10px !important;
+        border: 1px solid #B8860B !important;
+        background-color: rgba(0, 31, 63, 0.8) !important;
+        color: white !important;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 if not st.session_state["usuario_autenticado"]:
-    st.title("Iniciar Sesión o Registrarse en SPIRE")
+    st.title("BIENVENIDO A SPIRE STREAMING")
     st.markdown(
-        "Por favor, introduce tus credenciales para acceder al catálogo o crea una nueva cuenta."
+        "Accede a la experiencia definitiva de cine o crea tu cuenta exclusiva."
     )
 
     tab_login, tab_registro = st.tabs(["Iniciar Sesión", "Registrarse"])
@@ -48,28 +147,114 @@ if not st.session_state["usuario_autenticado"]:
 
     # --- PESTAÑA REGISTRO ---
     with tab_registro:
-        st.info("Crea tu cuenta en SPIRE.")
+        st.subheader("Crea tu cuenta")
+
+        # Intentar cargar géneros para el selector de gustos
+        opciones_generos = {}
+        try:
+            resp_gen = requests.get("http://localhost:8000/genres")
+            if resp_gen.status_code == 200:
+                for g in resp_gen.json():
+                    opciones_generos[g["name"]] = g["id"]
+        except Exception as e:
+            st.error(f"Error cargando categorías: {e}")
+
         with st.form("register_form"):
-            new_username = st.text_input("Nombre de Usuario Nuevo")
-            new_password = st.text_input("Contraseña", type="password")
-            new_password_confirm = st.text_input(
-                "Confirmar Contraseña", type="password"
-            )
-            btn_register = st.form_submit_button("Registrarse")
+            col1, col2 = st.columns(2)
+            with col1:
+                new_username = st.text_input(
+                    "Usuario", placeholder="Tu nombre de usuario"
+                )
+                new_email = st.text_input("Email", placeholder="ejemplo@correo.com")
+                new_password = st.text_input("Contraseña", type="password")
+
+            with col2:
+                # Ajustamos el calendario para cubrir desde 1900
+                new_fecha_nac = st.date_input(
+                    "Fecha de Nacimiento",
+                    value=None,
+                    min_value=datetime.date(1900, 1, 1),
+                    max_value=datetime.date.today(),
+                )
+                new_sexo = st.selectbox(
+                    "Sexo",
+                    ["Hombre", "Mujer", "Otro"],
+                    index=None,
+                    placeholder="Selecciona...",
+                )
+                new_password_confirm = st.text_input(
+                    "Confirmar Contraseña", type="password"
+                )
+
+            st.write("---")
+            st.markdown("**¿Qué generos te gusta ver?**")
+
+            # --- REFACTOR: Grid de Checkboxes para Categorías ---
+            if not opciones_generos:
+                st.caption("Cargando categorías o servidor no disponible...")
+
+            # Mostramos las categorías en un grid de 4 columnas para que quepa bien
+            if opciones_generos:
+                generos_lista = list(opciones_generos.keys())
+                num_cols = 4
+                rows = [
+                    generos_lista[i : i + num_cols]
+                    for i in range(0, len(generos_lista), num_cols)
+                ]
+
+                for row_genres in rows:
+                    cols = st.columns(num_cols)
+                    for i, genre_name in enumerate(row_genres):
+                        # Usamos key para persistir el valor en session_state y capturarlo al enviar
+                        cols[i].checkbox(genre_name, key=f"genre_{genre_name}")
+
+            btn_register = st.form_submit_button("REGISTRARSE AHORA")
 
             if btn_register:
-                if not new_username or not new_password:
-                    st.warning("Por favor, rellena todos los campos.")
+                # Recopilamos los gustos marcados desde el session_state
+                gustos_actuales = [
+                    opciones_generos[name]
+                    for name in opciones_generos
+                    if st.session_state.get(f"genre_{name}")
+                ]
+
+                if not new_username or not new_password or not new_email:
+                    st.warning(
+                        "Por favor, rellena los campos obligatorios (Usuario, Email y Contraseña)."
+                    )
                 elif new_password != new_password_confirm:
                     st.error("Las contraseñas no coinciden.")
                 else:
-                    # En un entorno real se haría un POST a un endpoint /usuarios del backend
-                    st.success(
-                        f"¡Usuario '{new_username}' registrado! (Simulación Frontend Local)"
-                    )
-                    st.info(
-                        "Ya puedes ir a la pestaña 'Iniciar Sesión' y entrar (usando Mock por ahora no te dejará entrar ya que no escribí en BD, es una simulación visual)."
-                    )
+                    # Preparar payload
+                    payload = {
+                        "username": new_username,
+                        "email": new_email,
+                        "password": new_password,
+                        "fecha_nacimiento": str(new_fecha_nac)
+                        if new_fecha_nac
+                        else None,
+                        "sexo": new_sexo,
+                        "intereses": gustos_actuales,
+                    }
+
+                    try:
+                        response = requests.post(
+                            "http://127.0.0.1:8000/register", json=payload
+                        )
+                        if response.status_code == 200:
+                            st.success(
+                                f"¡Bienvenido, {new_username}! Tu cuenta ha sido creada."
+                            )
+                            st.info(
+                                "Ya puedes ir a la pestaña 'Iniciar Sesión' para entrar."
+                            )
+                        else:
+                            error_detail = response.json().get(
+                                "detail", "Error desconocido"
+                            )
+                            st.error(f"Error al registrar: {error_detail}")
+                    except Exception as e:
+                        st.error(f"No se pudo conectar con el servidor: {e}")
 #################################################################################################
 # ---- PANTALLA PRINCIPAL DEL USUARIO (Logueado) ----
 
@@ -101,8 +286,14 @@ else:
     # --- SELECTOR DE MODELO DE IA ---
     modelo_ia = st.sidebar.selectbox(
         "Motor de Recomendación",
-        ["SVD (Rápido)", "KNN + Cosine (Explicable)", "Wide & Deep (Profundo)", "Content-Based (Cold-Start)", "Implicit BPR (Ranking Top)"],
-        index=4, # Ponemos el BPR por defecto porque es el mejor
+        [
+            "SVD (Rápido)",
+            "KNN + Cosine (Explicable)",
+            "Wide & Deep (Profundo)",
+            "Content-Based (Cold-Start)",
+            "Implicit BPR (Ranking Top)",
+        ],
+        index=4,  # Ponemos el BPR por defecto porque es el mejor
     )
     mapa_endpoints = {
         "SVD (Rápido)": "recomendar",
@@ -203,7 +394,7 @@ else:
 
         try:
             resp_ia = requests.get(
-                f"http://localhost:8000/{endpoint}/{user_id_ia}", params={"n": 8}
+                f"http://127.0.0.1:8000/{endpoint}/{user_id_ia}", params={"n": 8}
             )
             if resp_ia.status_code == 200:
                 recomendaciones = resp_ia.json().get("recomendaciones", [])
@@ -215,12 +406,12 @@ else:
                             if poster and poster != "" and poster != "nan":
                                 st.image(
                                     f"https://image.tmdb.org/t/p/w500{poster}",
-                                    use_container_width=True,
+                                    width="stretch",
                                 )
                             else:
                                 st.image(
                                     "https://via.placeholder.com/300x450.png?text=Sin+Poster",
-                                    use_container_width=True,
+                                    width="stretch",
                                 )
                             titulo_rec = rec.get("titulo", "Sin Título")
                             if len(titulo_rec) > 30:
@@ -236,9 +427,8 @@ else:
                 else:
                     st.info("No se encontraron recomendaciones para tu perfil.")
             elif resp_ia.status_code == 503:
-                st.warning(
-                    "El modelo de IA aún no está entrenado. Pídele al administrador que lo ejecute."
-                )
+                error_det = resp_ia.json().get("detail", "Error desconocido")
+                st.warning(f"El Backend reporta: {error_det}")
             else:
                 st.warning("No se pudieron obtener recomendaciones.")
         except requests.exceptions.ConnectionError:

@@ -45,6 +45,8 @@ ruta_imp_dat = "src/models/jj/modelo_5_implicit_dataset.pkl"
 ruta_modelo_ncf = "src/models/jj/modelo_6_ncf.onnx"
 ruta_ncf_user2idx = "src/models/jj/ncf_user2idx.json"
 ruta_ncf_item2idx = "src/models/jj/ncf_item2idx.json"
+ruta_modelo_tt = "src/models/jj/modelo_7_twotowers.onnx"
+ruta_tt_map = "src/models/jj/twotowers_mappings.pkl"
 
 
 @asynccontextmanager
@@ -67,6 +69,8 @@ async def lifespan(the_app: FastAPI):
     the_app.state.modelo_ncf = None
     the_app.state.ncf_user2idx = None
     the_app.state.ncf_item2idx = None
+    the_app.state.modelo_tt = None
+    the_app.state.tt_mappings = None
 
     # --- Modelo 1: SVD ---
     if os.path.exists(ruta_modelo_svd):
@@ -136,11 +140,25 @@ async def lifespan(the_app: FastAPI):
         except Exception as e:
             logger.error(f"No se pudo cargar el modelo NCF: {e}")
 
+    # --- Modelo 7: Two Towers (ONNX) ---
+    if os.path.exists(ruta_modelo_tt) and os.path.exists(ruta_tt_map):
+        try:
+            import onnxruntime as ort
+            import pickle
+            the_app.state.modelo_tt = ort.InferenceSession(ruta_modelo_tt)
+            with open(ruta_tt_map, "rb") as f:
+                the_app.state.tt_mappings = pickle.load(f)
+            logger.info("Modelo TwoTowers ONNX cargado correctamente.")
+        except Exception as e:
+            logger.error(f"No se pudo cargar el modelo TwoTowers: {e}")
+
     # --- CARGA DE DATOS (CSV) ---
     try:
         if os.path.exists(ruta_ratings):
             the_app.state.df_ratings_ia = pd.read_csv(ruta_ratings)
             logger.info(f"Ratings cargados: {len(the_app.state.df_ratings_ia):,} filas.")
+            # Pre-calcular conteos para velocidad O(1) en mensajes de progreso
+            the_app.state.user_counts = the_app.state.df_ratings_ia.groupby("userId").size().to_dict()
         if os.path.exists(ruta_catalogo):
             the_app.state.df_catalogo = pd.read_csv(ruta_catalogo)
             logger.info(f"Catálogo cargado: {len(the_app.state.df_catalogo):,} películas.")
@@ -467,7 +485,7 @@ def recomendar_knn(user_id: int, n: int = 10):
     # Extraemos items del modelo y buscamos similares en base a la historia del usuario
     # En este setup simplificado buscamos los items mas populares del dataset
     item_counts = app.state.df_ratings_ia["tmdb_id"].value_counts()
-    top_items = item_counts.index.tolist()
+    # top_items ya no es necesario
     todas = (
         set(app.state.df_catalogo["tmdb_id"].unique())
         if app.state.df_catalogo is not None
@@ -518,10 +536,13 @@ def recomendar_wnd_endpoint(user_id: int, n: int = 10):
     movie2idx = app.state.wnd_mappings["movie2idx"]
 
     if user_id not in user2idx:
+        # Informar del progreso en lugar de fallback
+        count = app.state.user_counts.get(user_id, 0)
         return {
             "recomendaciones": [],
             "modelo": "Wide&Deep (ONNX)",
-            "mensaje": f"El usuario {user_id} no cumplió el filtro de entrenamiento (>100 valoraciones).",
+            "mensaje": f"No alcanzas las 1000 valoraciones ({count}/1000).",
+            "insufficient_data": True
         }
 
     u_idx = user2idx[user_id]
@@ -550,21 +571,25 @@ def recomendar_wnd_endpoint(user_id: int, n: int = 10):
     # Inferencia ONNX
     try:
         ort_inputs = {
-            "user_id": user_arr,
-            "movie_id": movie_arr,
+            "user_ids": user_arr,
+            "item_ids": movie_arr,
         }
-        preds_norm = app.state.modelo_wnd.run(None, ort_inputs)[0]
+        # La salida de nuestro nuevo W&D Ranking es (Batch,) o (Batch, 1)
+        preds_raw = app.state.modelo_wnd.run(None, ort_inputs)[0].flatten()
     except Exception as e:
         print(f"ERROR en inferencia Wide&Deep: {e}")
         raise HTTPException(
             status_code=500, detail=f"Error en inferencia del modelo WnD: {e}"
         )
 
-    # Restringir predicción a rango [0.5, 5.0]
-    preds_onnx = np.clip(preds_norm, 0.5, 5.0)
+    # La salida de ranking (logits) la convertimos a escala visual 0.5-5.0
+    def sigmoid(x):
+        return 1 / (1 + np.exp(-np.clip(x, -20, 20)))
 
+    preds_prob = sigmoid(preds_raw)
+    
     predicciones = [
-        {"tmdb_id": int(tid), "predicted_rating": round(float(preds_onnx[i]), 2)}
+        {"tmdb_id": int(tid), "predicted_rating": round(float(preds_prob[i] * 4.5 + 0.5), 2)}
         for i, tid in enumerate(tmdb_ids)
     ]
 
@@ -756,11 +781,14 @@ def recomendar_ncf_endpoint(user_id: int, n: int = 10):
 
     # Verificar que el usuario existe en el vocabulario del modelo
     if user_id not in app.state.ncf_user2idx:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Usuario {user_id} no encontrado en el vocabulario NCF. "
-                   f"Solo usuarios con >= 200 ratings están cubiertos."
-        )
+        # Informar del progreso en lugar de fallback
+        count = app.state.user_counts.get(user_id, 0)
+        return {
+            "recomendaciones": [],
+            "modelo": "NCF",
+            "mensaje": f"No alcanzas las 1000 valoraciones ({count}/1000).",
+            "insufficient_data": True
+        }
 
     user_idx = app.state.ncf_user2idx[user_id]
 
@@ -816,4 +844,71 @@ def recomendar_ncf_endpoint(user_id: int, n: int = 10):
     except Exception as e:
         logger.error(f"Error en recomendación NCF para User {user_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+##############################################################################################
+#  Recomendación Modelo 7: Two Towers (Bi-Encoder)
+##############################################################################################
+
+
+@app.get("/recomendar/twotowers/{user_id}")
+def recomendar_tt_endpoint(user_id: int, n: int = 10):
+    """Endpoint de recomendaciones usando Two Towers Neural Network (ONNX)."""
+    logger.info(f"Petición TwoTowers para User {user_id}")
+    
+    if app.state.modelo_tt is None or app.state.tt_mappings is None:
+        raise HTTPException(status_code=503, detail="Modelo TwoTowers no cargado.")
+        
+    user2idx = app.state.tt_mappings["user2idx"]
+    item2idx = app.state.tt_mappings["item2idx"]
+    idx2item = {v: k for k, v in item2idx.items()}
+
+    if user_id not in user2idx:
+        # Informar del progreso en lugar de fallback
+        count = app.state.user_counts.get(user_id, 0)
+        return {
+            "recomendaciones": [],
+            "modelo": "Two-Towers",
+            "mensaje": f"No alcanzas las 1000 valoraciones ({count}/1000).",
+            "insufficient_data": True
+        }
+
+    u_idx = user2idx[user_id]
+    
+    # Puntuar items (Batch inference)
+    # Para velocidad en demo local puntuamos solo items que conoce el modelo
+    tids_candidatos = list(item2idx.keys())
+    i_indices = list(item2idx.values())
+    
+    user_arr = np.full(len(i_indices), u_idx, dtype=np.int64)
+    item_arr = np.array(i_indices, dtype=np.int64)
+    
+    try:
+        ort_inputs = {"user_ids": user_arr, "item_ids": item_arr}
+        # El modelo TT devuelve similitud (producto escalar)
+        scores = app.state.modelo_tt.run(None, ort_inputs)[0].flatten()
+    except Exception as e:
+        logger.error(f"Error TwoTowers inference: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+    # Filtrar ya vistas
+    if app.state.df_ratings_ia is not None:
+        vistas = set(app.state.df_ratings_ia[app.state.df_ratings_ia["userId"] == user_id]["tmdb_id"])
+        for idx, tid in enumerate(tids_candidatos):
+            if tid in vistas:
+                scores[idx] = -np.inf
+
+    top_indices = np.argsort(scores)[::-1][:n]
+    
+    predicciones = []
+    for idx in top_indices:
+        if scores[idx] == -np.inf: continue
+        tid = idx2item[item_arr[idx]]
+        # Escalar similitud arbitraria a 0.5-5.0 para UI
+        s = float(scores[idx])
+        rating_ui = min(5.0, max(0.5, 3.5 + (s * 0.1)))
+        predicciones.append({"tmdb_id": int(tid), "predicted_rating": round(rating_ui, 2)})
+
+    enriquecer_recomendaciones(predicciones)
+    return {"recomendaciones": predicciones, "modelo": "Two-Towers"}
 

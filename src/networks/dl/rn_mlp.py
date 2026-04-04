@@ -92,9 +92,7 @@ class WideAndDeepModel(nn.Module):
         # La decisión final (sumamos la intuición Deep con el recuerdo Wide)
         prediction = wide_out + deep_out
 
-        # Estabilizador matemático: Obligamos a que la red no escupa números infinitos 
-        # (lo que causaba explosión de gradiente). Lo encerramos entre 0 y 5.5 estrellas.
-        prediction = torch.sigmoid(prediction) * 5.5
-
-        # Devolvemos la predicción achollando dimensiones extra innecesarias (ej: [[4.3]] -> [4.3])
+        # Devolvemos el "Logit" crudo. 
+        # Para ranking, el valor relativo importa. 
+        # Para regresión (estrellas), el script de entrenamiento o la API pueden escalar el resultado.
         return prediction.squeeze(-1)

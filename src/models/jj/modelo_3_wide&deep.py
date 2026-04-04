@@ -66,65 +66,100 @@ EPOCHS = 10
 LEARNING_RATE = 0.001
 
 # Hacemos recomendaciones al 100% de tus usuarios.
-MIN_RATINGS_USUARIO = 1
-# Con 5 valoraciones por peli limpiamos un pelín el ruido de pelis raras
-MIN_RATINGS_PELICULA = 5
+# Hacemos recomendaciones al 100% de tus usuarios.
+MIN_RATINGS_USUARIO = 1000
+# Con 1000 valoraciones por peli sincronizamos con el evaluador
+MIN_RATINGS_PELICULA = 1000
+
+# Relación de muestreo negativo (cuántos "no-vistos" por cada "visto")
+NEG_SAMPLES_PER_POS = 4
 
 
 # -----------------------------------------------------------------------------------------
-# PASO 1: DATASET PERSONALIZADO DE PYTORCH
+# PASO 1: DATASET PERSONALIZADO DE PYTORCH CON NEGATIVE SAMPLING (OPTIMIZADO)
 # -----------------------------------------------------------------------------------------
-class RatingsDataset(Dataset):
+class RankingDataset(Dataset):
     """
-    Clase "Traductora" para PyTorch.
-    PyTorch no entiende de Tablas (Pandas DataFrames), solo entiende de "Tensores" (Matrices matemáticas).
-    Esta clase convierte nuestras columnas de Pandas (Usuarios, Películas y Notas) en Tensores que pueden
-    inyectarse a la Tarjeta Gráfica masivamente.
+    Dataset para Entrenamiento de Ranking (0/1).
+    Usa pre-asignación de arrays de Numpy para manejar millones de filas sin latencia de .append().
     """
 
-    def __init__(self, users, movies, ratings):
-        self.users = torch.tensor(users, dtype=torch.long)
-        self.movies = torch.tensor(movies, dtype=torch.long)
-        self.ratings = torch.tensor(ratings, dtype=torch.float32)
+    def __init__(self, pos_users, pos_movies, n_items, neg_sample_ratio):
+        n_pos = len(pos_users)
+        n_total = n_pos * (1 + neg_sample_ratio)
+
+        print(f"  Preparando {n_total:,} ejemplos para entrenamiento...")
+
+        # Pre-asignamos memoria en Numpy (Mucho más rápido que .append() en listas de Python)
+        self.users_np = np.zeros(n_total, dtype=np.int64)
+        self.items_np = np.zeros(n_total, dtype=np.int64)
+        self.labels_np = np.zeros(n_total, dtype=np.float32)
+
+        # Set de pelis por usuario para muestreo rápido
+        from collections import defaultdict
+
+        user_watched = defaultdict(set)
+        for u, m in zip(pos_users, pos_movies):
+            user_watched[u].add(m)
+
+        print(f"  Generando {neg_sample_ratio} negativos por cada positivo...")
+
+        # 1. Rellenar Positivos
+        self.users_np[:n_pos] = pos_users
+        self.items_np[:n_pos] = pos_movies
+        self.labels_np[:n_pos] = 1.0
+
+        # 2. Rellenar Negativos
+        import random
+
+        curr_idx = n_pos
+        num_items_total = len(n_items) if isinstance(n_items, list) else n_items
+        for u in pos_users:
+            if len(user_watched[u]) >= num_items_total * 0.9:
+                continue
+            for _ in range(neg_sample_ratio):
+                neg_m = random.randrange(num_items_total)
+                while neg_m in user_watched[u]:
+                    neg_m = random.randrange(num_items_total)
+                self.users_np[curr_idx] = u
+                self.items_np[curr_idx] = neg_m
+                self.labels_np[curr_idx] = 0.0
+                curr_idx += 1
+
+        self.users = torch.from_numpy(self.users_np)
+        self.movies = torch.from_numpy(self.items_np)
+        self.labels = torch.from_numpy(self.labels_np)
 
     def __len__(self):
-        return len(self.ratings)
+        return len(self.labels)
 
     def __getitem__(self, idx):
-        return self.users[idx], self.movies[idx], self.ratings[idx]
+        return self.users[idx], self.movies[idx], self.labels[idx]
 
 
 def cargar_y_preparar_datos():
-    """
-    Carga el CSV, aplica filtrado para hacerlo manejable en CPU,
-    limpia los IDs para que sean secuenciales y los parte en Entrenamiento/Test.
-    Los mappings guardados aqui son COHERENTES con el modelo entrenado.
-
-    ¿Por qué limpiamos los IDs?
-    En Deep Learning, si tienes el Usuario ID "10.000" pero solo tienes 50 usuarios,
-    crear una matriz de tamaño 10.000 desperdiciaría gigas de memoria.
-    Por eso "mapeamos" todo a índices consecutivos: 0, 1, 2, 3...
-    """
     print("=" * 70)
-    print("  MODELO 3: WIDE & DEEP (PyTorch) — Preparando Datos")
+    print("  MODELO 3: WIDE & DEEP (PyTorch) — Preparando Datos de Ranking")
     print("=" * 70)
 
     print(f"\n  Leyendo {ruta_ratings}...")
-    df = pd.read_csv(ruta_ratings)
+    df = pd.read_csv(ruta_ratings, on_bad_lines="skip")
     print(f"  -> Filas en bruto: {len(df):,}")
 
-    # --- FILTRADO para CPU ---
+    # --- FILTRADO más estricto para calidad y manejo de memoria ---
     print(
-        f"\n  Filtrando (usuario>={MIN_RATINGS_USUARIO} ratings, pelicula>={MIN_RATINGS_PELICULA} ratings)..."
+        f"\n  Filtrando (usuario>={MIN_RATINGS_USUARIO}, pelicula>={MIN_RATINGS_PELICULA})..."
     )
+    conteo_u = df.groupby("userId").size()
+    df = df[df["userId"].isin(conteo_u[conteo_u >= MIN_RATINGS_USUARIO].index)]
+    conteo_m = df.groupby("tmdb_id").size()
+    df = df[df["tmdb_id"].isin(conteo_m[conteo_m >= MIN_RATINGS_PELICULA].index)]
     conteo_u = df.groupby("userId").size()
     df = df[df["userId"].isin(conteo_u[conteo_u >= MIN_RATINGS_USUARIO].index)]
     conteo_m = df.groupby("tmdb_id").size()
     df = df[df["tmdb_id"].isin(conteo_m[conteo_m >= MIN_RATINGS_PELICULA].index)]
     print(f"  -> Filas tras filtro: {len(df):,}")
 
-    # IMPORTANTE: nn.Embedding(N) necesita indices exactos de 0 a (N-1).
-    print("\n  Creando indices continuos (Mapeos) para la Red Neuronal...")
     user_ids = df["userId"].unique()
     movie_ids = df["tmdb_id"].unique()
 
@@ -139,173 +174,126 @@ def cargar_y_preparar_datos():
 
     print(f"  -> Usuarios unicos: {num_users:,}")
     print(f"  -> Peliculas unicas: {num_movies:,}")
-    print(f"  -> Total puntuaciones: {len(df):,}")
 
-    # Dividir en Entrenamiento (80%) y Test (20%) de forma robusta con Scikit-Learn
-    # evitando problemas de índices duplicados de Pandas (.drop(index)) que corrompen el mapeo.
-    print("\n  Aleatorizando y dividiendo 80/20...")
+    # Dividir en Entrenamiento (80%) y Test (20%)
     df_train, df_test = train_test_split(df, test_size=0.2, random_state=42)
 
-    # Guardamos el diccionario para predecir en el futuro desde el Backend
+    # Guardar mapeos
     with open(ruta_mapeos, "wb") as f:
         pickle.dump({"user2idx": user2idx, "movie2idx": movie2idx}, f)
 
-    return df_train, df_test, num_users, num_movies
+    return df_train, df_test, num_users, num_movies, list(range(num_movies))
 
 
 # -----------------------------------------------------------------------------------------
 # PASO 2: ENTRENAMIENTO EN LA GRÁFICA (GPU)
 # -----------------------------------------------------------------------------------------
-def entrenar_modelo(df_train, df_test, num_users, num_movies):
+def entrenar_modelo(df_train, df_test, num_users, num_movies, all_movie_indices):
     print("=" * 70)
-    print("  MODELO 3: ENTRENAMIENTO EN GPU")
+    print("  MODELO 3: ENTRENAMIENTO W&D — MODALIDAD RANKING")
     print("=" * 70)
 
-    # 1. Detectar hardware (¡Aquí brilla tu RTX 5060 de Anaconda!)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(
-        f"\n  -> Dispositivo seleccionado: {device.type.upper()} "
-        + (
-            f"({torch.cuda.get_device_name(0)})"
-            if device.type == "cuda"
-            else "(Alerta: Estás usando CPU, será muy lento)"
-        )
-    )
+    print(f"  -> Usando: {device}")
 
-    # 2. Instanciar y mover la red a la tarjeta gráfica
-    # Aquí llamamos a la arquitectura (WideAndDeepModel) que definimos en `rn_mlp.py`.
-    # - embedding_dim=32: Significa que cada usuario/película se resume en un vector de 32 números.
-    # - hidden_layers=[64, 32]: La parte "Deep" pasará por dos capas neuronales reduciéndose en embudo.
-    # El comando ".to(device)" coge el modelo y lo envía a la RAM de la Tarjeta Gráfica.
     model = WideAndDeepModel(
         num_users=num_users,
         num_movies=num_movies,
-        embedding_dim=32,
-        hidden_layers=[64, 32],
+        embedding_dim=64,  # Aumentamos capacidad
+        hidden_layers=[128, 64, 32],
     ).to(device)
 
-    # 3. Preparar los empaquetadores (DataLoaders) que inyectarán datos a la gráfica por bloques
-    train_dataset = RatingsDataset(
+    # Creamos Datasets con Negativos
+    print("\n  Preparando Dataset de Entrenamiento (Positivos y Negativos)...")
+    train_dataset = RankingDataset(
         df_train["user_idx"].values,
         df_train["movie_idx"].values,
-        df_train["rating"].values,
+        all_movie_indices,
+        NEG_SAMPLES_PER_POS,
     )
-    test_dataset = RatingsDataset(
+    test_dataset = RankingDataset(
         df_test["user_idx"].values,
         df_test["movie_idx"].values,
-        df_test["rating"].values,
+        all_movie_indices,
+        1,  # Menos negativos en test para velocidad
     )
 
     train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
     test_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False)
 
-    # 4. Matemáticas de la predicción (Función de Pérdida y Optimizador)
-    # MSELoss: Compara la predicción con la realidad usando Error Cuadrático Medio.
-    criterio = nn.MSELoss()
-
-    # Adam: Es el "Mecánico" que ajustará las tuercas (pesos) de la red neuronal basándose en el error.
-    # El Learning Rate (0.001) define qué tan bruscos son los giros de tuerca al aprender.
+    # Usamos Binary Cross Entropy with Logits (ideal para Ranking 0/1)
+    criterio = nn.BCEWithLogitsLoss()
     optimizador = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
 
-    print(f"\n  Iniciando bucle Deep Learning de {EPOCHS} Epocas...")
-
     for epoch in range(EPOCHS):
-        model.train()  # Poner la red en modo iterativo/aprendizaje
+        model.train()
         total_loss = 0
         inicio_epoca = time.time()
 
-        # Inyectar Lotes (Batches) a la máquina
-        for i, (users, movies, ratings) in enumerate(train_loader):
-            # Mandar datos a la gráfica
+        for i, (users, movies, labels) in enumerate(train_loader):
             users = users.to(device)
             movies = movies.to(device)
-            ratings = ratings.to(device)
+            labels = labels.to(device)
 
-            # PASO A: Pensar la predicción (Forward Pass)
-            # Pasamos los IDs a la red para que dé su opinión (nota esperada)
-            predicciones = model(users, movies)
+            # Forward
+            logits = model(users, movies)
+            loss = criterio(logits, labels)
 
-            # PASO B: Ver cuánto nos hemos equivocado (Pérdida cruzada / Loss)
-            loss = criterio(predicciones, ratings)
+            # Backward
+            optimizador.zero_grad()
+            loss.backward()
+            optimizador.step()
 
-            # PASO C: Aprender (Ajustar pesos hacia atrás / Backpropagation)
-            optimizador.zero_grad()  # 1. Limpiamos la memoria de derivadas del paso anterior
-            loss.backward()  # 2. Cálculo matemático de cómo deberian modificarse los pesos
-            optimizador.step()  # 3. El optimizador (Adam) cambia efectivamente las redes neuronales
-
-            # Acumulamos el error total de toda la época
-            total_loss += loss.item() * len(ratings)
-
-            # Progreso en vivo
-            if i % 50 == 0 and i > 0:
-                print(
-                    f"    Batch {i:03d}/{len(train_loader)} | Loss actual: {loss.item():.4f}"
-                )
+            total_loss += loss.item() * len(labels)
 
         avg_train_loss = total_loss / len(train_dataset)
-        tiempo_epoca = time.time() - inicio_epoca
-
         print(
-            f"  Época {epoch + 1:02d}/{EPOCHS} | Train MSE: {avg_train_loss:.4f} | Tiempo: {tiempo_epoca:.1f}s"
+            f"  Época {epoch + 1:02d}/{EPOCHS} | Loss: {avg_train_loss:.4f} | {time.time() - inicio_epoca:.1f}s"
         )
 
-    print("\n  =======================================================")
-    print("  Evaluando precision del modelo final sobre Test Set...")
-
-    # Poner la red en modo "Congelado" (Solo predicción pura, sin aprender trampa del Test)
+    # Evaluación simple de Accuracy en Ranking
     model.eval()
-    test_loss = 0
-    test_mae = 0
-    with (
-        torch.no_grad()
-    ):  # Apaga el Tracking de Gradientes para ahorrar el 50% de memoria vRAM
-        for users, movies, ratings in test_loader:
-            users, movies, ratings = (
+    hits = 0
+    with torch.no_grad():
+        for users, movies, labels in test_loader:
+            users, movies, labels = (
                 users.to(device),
                 movies.to(device),
-                ratings.to(device),
+                labels.to(device),
             )
+            logits = model(users, movies)
+            preds = (torch.sigmoid(logits) > 0.5).float()
+            hits += (preds == labels).sum().item()
 
-            predicciones = model(users, movies)
-            # Truco: Nadie puede votar fuera de 0.5 a 5.0, así que capamos la respuesta
-            predicciones = torch.clamp(predicciones, 0.5, 5.0)
+    acc = hits / len(test_dataset)
+    print(f"\n  Ranking Accuracy en Test: {acc * 100:.2f}%")
 
-            test_loss += nn.MSELoss()(predicciones, ratings).item() * len(ratings)
-            test_mae += nn.L1Loss()(predicciones, ratings).item() * len(ratings)
-
-    rmse_final = (test_loss / len(test_dataset)) ** 0.5
-    mae_final = test_mae / len(test_dataset)
-
-    print(f"\n╔══════════════════════════════════════╗")
-    print(f"  ║  RESULTADOS DE WIDE & DEEP           ║")
-    print(f"  ╠══════════════════════════════════════╣")
-    print(f"  ║  RMSE: {rmse_final:.4f}              ║")
-    print(f"  ║  MAE:  {mae_final:.4f}               ║")
-    print(f"  ╚══════════════════════════════════════╝")
-
-    # 5. Guardado del cerebro entrenado (.pth para PyTorch, donde están los pesos)
+    # Guardado .pth
     torch.save(model.state_dict(), ruta_modelo)
-    tamano_mb = os.path.getsize(ruta_modelo) / (1024 * 1024)
-    print(f"\n  Cerebro Wide&Deep guardado en {ruta_modelo} ({tamano_mb:.1f} MB)")
 
-    # 5b. Registrar métricas en historial CSV
-    registrar_metricas(
-        modelo="Wide&Deep",
-        hiperparams={
-            "embedding_dim": 32,
-            "n_epocas": EPOCHS,
-            "learning_rate": LEARNING_RATE,
-            "batch_size": BATCH_SIZE,
-            "hidden_layers": "[64, 32]",
-            "min_ratings_item": MIN_RATINGS_PELICULA,
-        },
-        metricas={"MAE": mae_final, "RMSE": rmse_final},
-        dataset_size=len(df_train) + len(df_test),
+    # EXPORTACIÓN A ONNX (Crucial para la API)
+    ruta_onnx = ruta_modelo.replace(".pth", ".onnx")
+    print(f"\n  Exportando a ONNX en {ruta_onnx}...")
+    model.cpu()
+    dummy_u = torch.zeros(1, dtype=torch.long)
+    dummy_m = torch.zeros(1, dtype=torch.long)
+    torch.onnx.export(
+        model,
+        (dummy_u, dummy_m),
+        ruta_onnx,
+        input_names=["user_ids", "item_ids"],
+        output_names=["output"],
+        dynamic_axes={"user_ids": {0: "batch_size"}, "item_ids": {0: "batch_size"}},
     )
 
-    print("=" * 70)
+    registrar_metricas(
+        modelo="Wide&Deep-Ranking",
+        hiperparams={"epochs": EPOCHS, "neg_ratio": NEG_SAMPLES_PER_POS, "emb_dim": 64},
+        metricas={"Accuracy": acc},
+        dataset_size=len(train_dataset),
+    )
 
 
 if __name__ == "__main__":
-    df_train, df_test, num_u, num_m = cargar_y_preparar_datos()
-    entrenar_modelo(df_train, df_test, num_u, num_m)
+    df_train, df_test, num_u, num_m, all_m = cargar_y_preparar_datos()
+    entrenar_modelo(df_train, df_test, num_u, num_m, all_m)

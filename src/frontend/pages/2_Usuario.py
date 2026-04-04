@@ -292,6 +292,7 @@ else:
             "Content-Based (Cold-Start)",
             "Implicit BPR (Ranking Top)",
             "NCF (Deep Learning)",
+            "Two Towers (Retrieval)",
         ],
         index=4,  # Ponemos el BPR por defecto porque es el mejor
     )
@@ -302,6 +303,7 @@ else:
         "Content-Based (Cold-Start)": "recomendar/content",
         "Implicit BPR (Ranking Top)": "recomendar/implicit",
         "NCF (Deep Learning)": "recomendar/ncf",
+        "Two Towers (Retrieval)": "recomendar/twotowers",
     }
     endpoint_ia = mapa_endpoints[modelo_ia]
 
@@ -398,7 +400,10 @@ else:
                 f"http://127.0.0.1:8000/{endpoint}/{user_id_ia}", params={"n": 8}
             )
             if resp_ia.status_code == 200:
-                recomendaciones = resp_ia.json().get("recomendaciones", [])
+                datos = resp_ia.json()
+                recomendaciones = datos.get("recomendaciones", [])
+                mensaje = datos.get("mensaje", "")
+
                 if recomendaciones:
                     cols_ia = st.columns(4)
                     for idx, rec in enumerate(recomendaciones):
@@ -425,6 +430,11 @@ else:
                                 st.toast(
                                     rec.get("overview", "Sin sinopsis disponible.")
                                 )
+                elif "insufficient_data" in datos or "No alcanzas" in mensaje:
+                    st.info(f"**Requisito del Modelo**: {mensaje}")
+                    st.caption(
+                        "Esta red neuronal requiere que el usuario tenga un historial denso (1000+ valoraciones) para capturar patrones profundos de comportamiento."
+                    )
                 else:
                     st.info("No se encontraron recomendaciones para tu perfil.")
             elif resp_ia.status_code == 503:

@@ -18,7 +18,12 @@
 import pandas as pd
 import pickle
 import os
+import sys
 import time
+
+# Añadir el directorio raíz al PATH para importar utilidades
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..")))
+from src.utils.registrar_metricas import registrar_metricas
 
 from surprise import SVD, Dataset, Reader
 from surprise.model_selection import train_test_split
@@ -267,6 +272,20 @@ if __name__ == "__main__":
 
     # Paso 3: Guardar el modelo entrenado para el Backend
     guardar_modelo(modelo)
+
+    # Paso 3b: Registrar métricas en historial CSV
+    registrar_metricas(
+        modelo="SVD",
+        hiperparams={
+            "n_factores": n_factores,
+            "n_epocas": n_epocas,
+            "learning_rate": learning_rate,
+            "regularizacion": regularizacion,
+            "min_ratings_user": min_ratings_por_usuario,
+        },
+        metricas={"MAE": mae, "RMSE": rmse},
+        dataset_size=len(df),
+    )
 
     # Paso 4: Demo rápida — Probamos recomendaciones para un usuario de ejemplo
     print("\n" + "=" * 70)

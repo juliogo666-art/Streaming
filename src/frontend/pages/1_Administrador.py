@@ -11,7 +11,107 @@ import extra_streamlit_components as stx  # Librería extra para manejar Cookies
 cookie_manager = stx.CookieManager()
 
 # Configuramos el nombre de la pestaña del navegador y que ocupe el 100% del ancho de banda
-st.set_page_config(page_title="Admin Panel", layout="wide")
+st.set_page_config(page_title="Admin Panel - SPIRE", layout="wide")
+
+# ---- ESTILOS PERSONALIZADOS (Azul Marino y Oro — Consistente con 2_Usuario) ----
+st.markdown(
+    """
+    <style>
+    /* Fondo y colores principales */
+    .stApp {
+        background-color: #001220;
+        color: #f0f0f0;
+    }
+
+    /* Títulos en Dorado Premium */
+    h1, h2, h3, .stSubheader {
+        color: #B8860B !important;
+        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        font-weight: 700;
+        text-shadow: 1px 1px 2px rgba(0,0,0,0.5);
+    }
+
+    /* Texto normal */
+    p, span, label {
+        color: #e0e0e0 !important;
+    }
+
+    /* Estilo para los Tabs */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 10px;
+        background-color: rgba(0, 31, 63, 0.5);
+        padding: 10px;
+        border-radius: 10px;
+    }
+    .stTabs [data-baseweb="tab"] {
+        height: 45px;
+        background-color: transparent;
+        border-radius: 5px;
+        color: #f0f0f0;
+        border: 1px solid transparent;
+        transition: all 0.2s;
+    }
+    .stTabs [aria-selected="true"] {
+        background-color: #B8860B !important;
+        color: #001220 !important;
+        border-color: #B8860B !important;
+        font-weight: bold;
+    }
+
+    /* Botones Premium */
+    div.stButton > button {
+        background-color: #B8860B !important;
+        color: #001220 !important;
+        font-weight: bold !important;
+        border: 1px solid #B8860B !important;
+        border-radius: 8px !important;
+        padding: 0.6rem 2rem !important;
+        transition: all 0.3s ease !important;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+    }
+    div.stButton > button:hover {
+        background-color: #001f3f !important;
+        color: #B8860B !important;
+        transform: translateY(-2px) !important;
+        box-shadow: 0 4px 20px rgba(184, 134, 11, 0.4) !important;
+    }
+
+    /* Inputs estilizados */
+    .stTextInput>div>div>input, .stSelectbox>div>div>div {
+        background-color: #001f3f !important;
+        color: white !important;
+        border: 1px solid #1a3a5f !important;
+        border-radius: 8px !important;
+    }
+
+    /* DataFrames y tablas */
+    .stDataFrame {
+        border: 1px solid #1a3a5f;
+        border-radius: 8px;
+    }
+
+    /* Métricas */
+    [data-testid="stMetric"] {
+        background-color: rgba(0, 31, 63, 0.5);
+        border: 1px solid #1a3a5f;
+        border-radius: 10px;
+        padding: 15px;
+    }
+    [data-testid="stMetricLabel"] {
+        color: #B8860B !important;
+    }
+
+    /* Expanders */
+    .streamlit-expanderHeader {
+        background-color: rgba(0, 31, 63, 0.5);
+        border-radius: 8px;
+        color: #B8860B !important;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 # Intentamos leer todas las cookies instaladas actualmente en el navegador del usuario
 cookies = cookie_manager.get_all()
@@ -22,10 +122,10 @@ if not cookies:
     time.sleep(0.5)
     cookies = cookie_manager.get_all()
 
-# Buscamos específicamente si dentro de sus cookies existe la nuestra, llamada "disney_admin_session"
+# Buscamos específicamente si dentro de sus cookies existe la nuestra, llamada "spire_admin_session"
 try:
-    saved_cookie = cookies.get(cookie="disney_admin_session")
-except:
+    saved_cookie = cookies.get(cookie="spire_admin_session")
+except Exception:
     saved_cookie = None
 
 ##########################################################################################

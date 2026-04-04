@@ -23,9 +23,14 @@
 import pandas as pd
 import pickle
 import os
+import sys
 import time
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import linear_kernel
+
+# Añadir el directorio raíz al PATH para importar utilidades
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..")))
+from src.utils.registrar_metricas import registrar_metricas
 
 ############################################################################################
 
@@ -219,6 +224,15 @@ if __name__ == "__main__":
     df = preparar_datos()
     modelo_tfidf, matriz_textual, dist_indices = entrenar_tfidf(df)
     guardar_modelo(modelo_tfidf, matriz_textual, dist_indices)
+
+    # Registrar métricas en historial CSV
+    registrar_metricas(
+        modelo="TF-IDF (Content-Based)",
+        hiperparams={},
+        metricas={},
+        dataset_size=len(df),
+        notas="Modelo content-based, no aplican MAE/RMSE ni métricas de ranking directas.",
+    )
 
     print("\n  DEMO: Recomendaciones para usuario NUEVO (9999999)")
     df_ratings_demo = pd.read_csv(

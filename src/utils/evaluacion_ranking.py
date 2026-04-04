@@ -31,6 +31,9 @@ RUTA_TFIDF_MAT = "src/models/jj/modelo_4_matriz.pkl"
 RUTA_TFIDF_IDX = "src/models/jj/modelo_4_indices.pkl"
 RUTA_IMP_MOD = "src/models/jj/modelo_5_implicit.pkl"
 RUTA_IMP_DAT = "src/models/jj/modelo_5_implicit_dataset.pkl"
+RUTA_NCF_ONNX = "src/models/jj/modelo_6_ncf.onnx"
+RUTA_NCF_USER2IDX = "src/models/jj/ncf_user2idx.json"
+RUTA_NCF_ITEM2IDX = "src/models/jj/ncf_item2idx.json"
 
 # Guardar Resultados
 RUTA_RESULTADOS = "src/utils/metricas_ranking.csv"
@@ -168,6 +171,20 @@ def cargar_modelos():
         except Exception as e:
             print(f"  Error cargando Implicit: {e}")
 
+    # NCF (ONNX Runtime)
+    if os.path.exists(RUTA_NCF_ONNX):
+        try:
+            import onnxruntime as ort
+            import json
+            modelos["NCF"] = ort.InferenceSession(RUTA_NCF_ONNX)
+            with open(RUTA_NCF_USER2IDX, "r") as f:
+                modelos["NCF_USER2IDX"] = {int(k): v for k, v in json.load(f).items()}
+            with open(RUTA_NCF_ITEM2IDX, "r") as f:
+                modelos["NCF_ITEM2IDX"] = {int(k): v for k, v in json.load(f).items()}
+            print(f"  NCF ONNX cargado.")
+        except Exception as e:
+            print(f"  Error cargando NCF: {e}")
+
     print(f"  Modelos listos: {list(modelos.keys())}")
     return modelos
 
@@ -284,6 +301,31 @@ def predecir_implicit(modelo, dataset, user_id, test_vistas_ratings, candidatas)
         return []
 
 
+def predecir_ncf(modelo_onnx, user2idx, item2idx, user_id, candidatas):
+    """
+    Predicción NCF via ONNX Runtime: puntua cada candidata y devuelve Top-K.
+    """
+    if user_id not in user2idx:
+        return []
+
+    u_idx = user2idx[user_id]
+
+    # Filtrar candidatas que existan en el vocabulario NCF
+    cands_validas = [(tid, item2idx[tid]) for tid in candidatas if tid in item2idx]
+    if not cands_validas:
+        return []
+
+    tids, m_idxs = zip(*cands_validas)
+    user_ids_np = np.full(len(m_idxs), u_idx, dtype=np.int64)
+    item_ids_np = np.array(list(m_idxs), dtype=np.int64)
+
+    scores = modelo_onnx.run(None, {"user_ids": user_ids_np, "item_ids": item_ids_np})[0]
+
+    pares = list(zip(tids, scores.tolist()))
+    pares.sort(key=lambda x: x[1], reverse=True)
+    return [p[0] for p in pares[:K]]
+
+
 ############################################################################################
 
 
@@ -322,6 +364,7 @@ def evaluar():
         "WND": metricas_base.copy() if "WND" in modelos else None,
         "TFIDF": metricas_base.copy() if "TFIDF_MAT" in modelos else None,
         "IMP": metricas_base.copy() if "IMP" in modelos else None,
+        "NCF": metricas_base.copy() if "NCF" in modelos else None,
     }
     # Reset lists inside dicts (importante por .copy() superficial)
     for k in resultados:
@@ -412,6 +455,20 @@ def evaluar():
                 resultados["IMP"]["h"] += hit_rate(top_imp, pelis_relevantes)
                 resultados["IMP"]["recs"].append(top_imp)
 
+        # Evaluate NCF
+        top_ncf = []
+        if resultados["NCF"] is not None:
+            top_ncf = predecir_ncf(
+                modelos["NCF"], modelos["NCF_USER2IDX"], modelos["NCF_ITEM2IDX"],
+                u, candidatas
+            )
+            if top_ncf:
+                resultados["NCF"]["p"] += precision_at_k(top_ncf, pelis_relevantes)
+                resultados["NCF"]["r"] += recall_at_k(top_ncf, pelis_relevantes)
+                resultados["NCF"]["n"] += ndcg_at_k(top_ncf, dict_relevantes)
+                resultados["NCF"]["h"] += hit_rate(top_ncf, pelis_relevantes)
+                resultados["NCF"]["recs"].append(top_ncf)
+
         # Solo si procesamos un usuario válido, aumentamos el contador
         if (
             top_svd
@@ -419,6 +476,7 @@ def evaluar():
             or top_wnd
             or top_tf
             or (resultados.get("IMP") and top_imp)
+            or (resultados.get("NCF") and top_ncf)
         ):
             n_usuarios_final += 1
 

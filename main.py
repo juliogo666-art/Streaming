@@ -5,14 +5,25 @@ import sys
 
 
 def main():
+    # Obtener el root
+    ruta_raiz = os.getcwd()
+    env_config = os.environ.copy()
+    env_config["PYTHONPATH"] = ruta_raiz
+
     # 1. Lanzar el Backend (FastAPI)
-    backend = subprocess.Popen(["uvicorn", "src.api.main_api:app", "--reload"])
+    backend = subprocess.Popen(
+        [sys.executable, "-m", "uvicorn", "src.api.main_api:app", "--reload"],
+        env=env_config
+    )
 
     # 2. Esperar un par de segundos a que el backend suba
     time.sleep(2)
 
     # 3. Lanzar el Frontend (Streamlit)
-    frontend = subprocess.Popen(["streamlit", "run", "src/frontend/app_ui.py"])
+    frontend = subprocess.Popen(
+        [sys.executable, "-m", "streamlit", "run", "src/frontend/app_ui.py"],
+        env=env_config
+    )
 
     try:
         backend.wait()
@@ -26,14 +37,14 @@ def main_debug():
     # Obtenemos la ruta raíz del proyecto
     ruta_raiz = os.getcwd()
 
-    # Preparamos el entorno para que los subprocesos vean la carpeta 'src'
+    # Preparar el entorno para que los subprocesos vean el proyecto completo
     env_config = os.environ.copy()
-    env_config["PYTHONPATH"] = os.path.join(ruta_raiz, "src")
+    env_config["PYTHONPATH"] = ruta_raiz
 
     print("Iniciando Debug de Backend...")
-    # Usamos sys.executable para asegurar que usen el MISMO venv que el main
+    # Usar el root como base para que los imports relativos de 'src' funcionen
     backend = subprocess.Popen(
-        [sys.executable, "-m", "uvicorn", "api.main_api:app", "--reload"],
+        [sys.executable, "-m", "uvicorn", "src.api.main_api:app", "--reload"],
         env=env_config,
     )
 

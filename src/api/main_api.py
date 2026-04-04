@@ -1,11 +1,15 @@
+from contextlib import asynccontextmanager
+import logging
+
 from fastapi import FastAPI, HTTPException
 from .database import get_db_connection
 from .etl import ejecutar_importacion, limpiar_tablas_contenido
+from ..schemas.schemas import LoginRequest, RegisterRequest
 import pandas as pd
 import numpy as np
-from pydantic import BaseModel
 import bcrypt
 import os
+from sklearn.metrics.pairwise import cosine_similarity
 
 try:
     import onnxruntime as ort
@@ -16,7 +20,139 @@ except ImportError as e:
     print(f"[WnD] onnxruntime no instalado: {e}")
     ONNX_DISPONIBLE = False
 
-app = FastAPI()
+# --- Configuración de Logging Estructurado ---
+log_handler = logging.FileHandler("logs/backend.log", encoding="utf-8")
+log_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+logger = logging.getLogger("streaming_api")
+logger.addHandler(log_handler)
+logger.addHandler(logging.StreamHandler())
+logger.setLevel(logging.INFO)
+
+# --- CONFIGURACIÓN DE RUTAS Y ESTADO ---
+# Ruta al modelo SVD entrenado y al CSV de ratings, para saber qué pelis ya ha visto el usuario.
+ruta_ratings = "src/data/ready/ratings_finales_ia.csv"
+ruta_catalogo = "src/data/ready/dataset_final_movies.csv"
+
+# --- RUTAS DE MODELOS (Sincronizadas con disco) ---
+ruta_modelo_svd = "src/models/jj/modelo_1_SVD.joblib"
+ruta_modelo_knn = "src/models/jj/modelo_2_knn_cs.joblib"
+ruta_modelo_wnd = "src/models/jj/modelo_3_wnd.onnx"
+ruta_wnd_map = "src/models/jj/wnd_mappings.pkl"
+ruta_tfidf_mat = "src/models/jj/modelo_4_matriz.joblib"
+ruta_tfidf_idx = "src/models/jj/modelo_4_indices.joblib"
+ruta_imp = "src/models/jj/modelo_5_implicit.pkl"
+ruta_imp_dat = "src/models/jj/modelo_5_implicit_dataset.pkl"
+ruta_modelo_ncf = "src/models/jj/modelo_6_ncf.onnx"
+ruta_ncf_user2idx = "src/models/jj/ncf_user2idx.json"
+ruta_ncf_item2idx = "src/models/jj/ncf_item2idx.json"
+
+
+@asynccontextmanager
+async def lifespan(the_app: FastAPI):
+    """Gestiona el ciclo de vida de la aplicación: carga modelos al arrancar, limpia al cerrar."""
+    logger.info("[STARTUP] Iniciando carga de modelos de IA en memoria...")
+    logger.info("[INFO] Cargando ratings (434MB)... espera unos 30-40s.")
+
+    # --- Inicialización de estado ---
+    the_app.state.modelo_svd = None
+    the_app.state.df_ratings_ia = None
+    the_app.state.df_catalogo = None
+    the_app.state.modelo_knn = None
+    the_app.state.modelo_wnd = None
+    the_app.state.wnd_mappings = None
+    the_app.state.modelo_tfidf_mat = None
+    the_app.state.modelo_tfidf_idx = None
+    the_app.state.modelo_imp = None
+    the_app.state.modelo_imp_dat = None
+    the_app.state.modelo_ncf = None
+    the_app.state.ncf_user2idx = None
+    the_app.state.ncf_item2idx = None
+
+    # --- Modelo 1: SVD ---
+    if os.path.exists(ruta_modelo_svd):
+        try:
+            import joblib
+            the_app.state.modelo_svd = joblib.load(ruta_modelo_svd)
+            logger.info("Modelo SVD cargado correctamente (Joblib).")
+        except Exception as e:
+            logger.error(f"No se pudo cargar el modelo SVD: {e}.")
+
+    # --- Modelo 2: KNN ---
+    if os.path.exists(ruta_modelo_knn):
+        try:
+            import joblib
+            the_app.state.modelo_knn = joblib.load(ruta_modelo_knn)
+            logger.info("Modelo KNN+Cosine cargado (Joblib).")
+        except Exception as e:
+            logger.error(f"No se pudo cargar el modelo KNN: {e}")
+
+    # --- Modelo 3: Wide & Deep (ONNX Runtime) ---
+    if os.path.exists(ruta_modelo_wnd) and os.path.exists(ruta_wnd_map):
+        try:
+            import onnxruntime as ort
+            import pickle
+            the_app.state.modelo_wnd = ort.InferenceSession(ruta_modelo_wnd)
+            with open(ruta_wnd_map, "rb") as f:
+                the_app.state.wnd_mappings = pickle.load(f)
+            logger.info("Modelo Wide&Deep ONNX cargado correctamente.")
+        except Exception as e:
+            logger.error(f"No se pudo cargar el modelo Wide&Deep: {e}")
+
+    # --- Modelo 4: Content-Based (TF-IDF) ---
+    if os.path.exists(ruta_tfidf_mat) and os.path.exists(ruta_tfidf_idx):
+        try:
+            import joblib
+            the_app.state.modelo_tfidf_mat = joblib.load(ruta_tfidf_mat)
+            the_app.state.modelo_tfidf_idx = joblib.load(ruta_tfidf_idx)
+            logger.info("Modelo TF-IDF cargado correctamente (Joblib).")
+        except Exception as e:
+            logger.error(f"No se pudo cargar el modelo TF-IDF: {e}")
+
+    # --- Modelo 5: Implicit BPR ---
+    if os.path.exists(ruta_imp) and os.path.exists(ruta_imp_dat):
+        try:
+            import pickle
+            with open(ruta_imp, "rb") as f:
+                the_app.state.modelo_imp = pickle.load(f)
+            with open(ruta_imp_dat, "rb") as f:
+                the_app.state.modelo_imp_dat = pickle.load(f)
+            logger.info("Modelo Implicit cargado correctamente.")
+        except Exception as e:
+            logger.error(f"No se pudo cargar el modelo Implicit: {e}")
+
+    # --- Modelo 6: NCF (ONNX) ---
+    if os.path.exists(ruta_modelo_ncf):
+        try:
+            import onnxruntime as ort
+            import json
+            the_app.state.modelo_ncf = ort.InferenceSession(ruta_modelo_ncf)
+            if os.path.exists(ruta_ncf_user2idx):
+                with open(ruta_ncf_user2idx, "r") as f:
+                    the_app.state.ncf_user2idx = {int(k): v for k, v in json.load(f).items()}
+            if os.path.exists(ruta_ncf_item2idx):
+                with open(ruta_ncf_item2idx, "r") as f:
+                    the_app.state.ncf_item2idx = {int(k): v for k, v in json.load(f).items()}
+            logger.info("Modelo NCF ONNX cargado correctamente.")
+        except Exception as e:
+            logger.error(f"No se pudo cargar el modelo NCF: {e}")
+
+    # --- CARGA DE DATOS (CSV) ---
+    try:
+        if os.path.exists(ruta_ratings):
+            the_app.state.df_ratings_ia = pd.read_csv(ruta_ratings)
+            logger.info(f"Ratings cargados: {len(the_app.state.df_ratings_ia):,} filas.")
+        if os.path.exists(ruta_catalogo):
+            the_app.state.df_catalogo = pd.read_csv(ruta_catalogo)
+            logger.info(f"Catálogo cargado: {len(the_app.state.df_catalogo):,} películas.")
+    except Exception as e:
+        logger.error(f"Error al cargar archivos CSV de datos: {e}")
+
+    logger.info("[STARTUP] Carga de modelos completada.")
+    yield  # La app está corriendo
+    logger.info("[SHUTDOWN] Cerrando aplicación...")
+
+
+app = FastAPI(lifespan=lifespan)
 
 
 @app.get("/status")
@@ -82,18 +218,7 @@ def importar_datos():
         conn.close()
 
 
-class LoginRequest(BaseModel):
-    username: str
-    password: str
-
-
-class RegisterRequest(BaseModel):
-    username: str
-    email: str
-    password: str
-    fecha_nacimiento: str = None
-    sexo: str = None
-    intereses: list[int] = []
+# LoginRequest y RegisterRequest importados de src.schemas.schemas
 
 
 @app.post("/login")
@@ -228,111 +353,7 @@ def register(datos: RegisterRequest):
         conn.close()
 
 
-# --- CONFIGURACIÓN DE RUTAS Y ESTADO ---
-# Ruta al modelo SVD entrenado y al CSV de ratings, para saber qué pelis ya ha visto el usuario.
-ruta_ratings = "src/data/ready/ratings_finales_ia.csv"
-ruta_catalogo = "src/data/ready/dataset_final_movies.csv"
 
-# --- INICIALIZACIÓN DE ESTADO DE LA APP ---
-
-# --- INICIALIZACIÓN DE ESTADO DE LA APP ---
-# Usamos app.state para que los modelos persistan correctamente en memoria entre peticiones
-app.state.modelo_svd = None
-app.state.df_ratings_ia = None
-app.state.df_catalogo = None
-app.state.modelo_knn = None
-app.state.modelo_wnd = None
-app.state.wnd_mappings = None
-app.state.modelo_tfidf_mat = None
-app.state.modelo_tfidf_idx = None
-app.state.modelo_imp = None
-app.state.modelo_imp_dat = None
-
-# --- RUTAS DE MODELOS (Sincronizadas con disco) ---
-ruta_modelo_svd = "src/models/jj/modelo_1_SVD.joblib"
-ruta_modelo_knn = "src/models/jj/modelo_2_knn_cs.joblib"
-ruta_modelo_wnd = "src/models/jj/modelo_3_wnd.onnx"
-ruta_wnd_map = "src/models/jj/wnd_mappings.pkl"
-ruta_tfidf_mat = "src/models/jj/modelo_4_matriz.joblib"
-ruta_tfidf_idx = "src/models/jj/modelo_4_indices.joblib"
-ruta_imp = "src/models/jj/modelo_5_implicit.pkl"
-ruta_imp_dat = "src/models/jj/modelo_5_implicit_dataset.pkl"
-
-
-@app.on_event("startup")
-def cargar_modelo_al_arrancar():
-    """Carga los modelos pesados en la memoria RAM de forma asíncrona."""
-    print("[STARTUP] Iniciando carga de modelos de IA en memoria...")
-    print("[INFO] Cargando ratings (434MB)... espera unos 30-40s.")
-
-    # --- Modelo 1: SVD (Requiere scikit-surprise) ---
-    if os.path.exists(ruta_modelo_svd):
-        try:
-            import joblib
-
-            app.state.modelo_svd = joblib.load(ruta_modelo_svd)
-            print("Modelo SVD cargado correctamente (Joblib).")
-        except Exception as e:
-            print(f"ERROR: No se pudo cargar el modelo SVD: {e}.")
-
-    # --- Modelo 2: KNN ---
-    if os.path.exists(ruta_modelo_knn):
-        try:
-            import joblib
-
-            app.state.modelo_knn = joblib.load(ruta_modelo_knn)
-            print("Modelo KNN+Cosine cargado (Joblib).")
-        except Exception as e:
-            print(f"ERROR: No se pudo cargar el modelo KNN: {e}")
-
-    # --- Modelo 3: Wide & Deep (ONNX Runtime) ---
-    if os.path.exists(ruta_modelo_wnd) and os.path.exists(ruta_wnd_map):
-        try:
-            import onnxruntime as ort
-            import pickle
-
-            app.state.modelo_wnd = ort.InferenceSession(ruta_modelo_wnd)
-            with open(ruta_wnd_map, "rb") as f:
-                app.state.wnd_mappings = pickle.load(f)
-            print("Modelo Wide&Deep ONNX cargado correctamente.")
-        except Exception as e:
-            print(f"ERROR: No se pudo cargar el modelo Wide&Deep: {e}")
-
-    # --- Modelo 4: Content-Based (TF-IDF) ---
-    if os.path.exists(ruta_tfidf_mat) and os.path.exists(ruta_tfidf_idx):
-        try:
-            import joblib
-
-            app.state.modelo_tfidf_mat = joblib.load(ruta_tfidf_mat)
-            app.state.modelo_tfidf_idx = joblib.load(ruta_tfidf_idx)
-            print("Modelo TF-IDF cargado correctamente (Joblib).")
-        except Exception as e:
-            print(f"ERROR: No se pudo cargar el modelo TF-IDF: {e}")
-
-    # --- Modelo 5: Implicit BPR ---
-    if os.path.exists(ruta_imp) and os.path.exists(ruta_imp_dat):
-        try:
-            import pickle
-
-            with open(ruta_imp, "rb") as f:
-                app.state.modelo_imp = pickle.load(f)
-            with open(ruta_imp_dat, "rb") as f:
-                app.state.modelo_imp_dat = pickle.load(f)
-            print("Modelo Implicit cargado correctamente.")
-        except Exception as e:
-            print(f"ERROR: No se pudo cargar el modelo Implicit: {e}")
-
-    # --- CARGA DE DATOS (CSV) ---
-    try:
-        if os.path.exists(ruta_ratings):
-            app.state.df_ratings_ia = pd.read_csv(ruta_ratings)
-            print(f"Ratings cargados: {len(app.state.df_ratings_ia):,} filas.")
-
-        if os.path.exists(ruta_catalogo):
-            app.state.df_catalogo = pd.read_csv(ruta_catalogo)
-            print(f"Catálogo cargado: {len(app.state.df_catalogo):,} películas.")
-    except Exception as e:
-        print(f"ERROR al cargar archivos CSV de datos: {e}")
 
 
 @app.get("/recomendar/svd/{user_id}")
@@ -616,8 +637,6 @@ def recomendar_content_endpoint(user_id: int, n: int = 10):
     # Calculamos perfil del usuario (media de los vectores de peliculas vistas)
     user_profile = np.asarray(app.state.modelo_tfidf_mat[tfidf_indices].mean(axis=0))
     # Similitud coseno contra todo el catálogo
-    from sklearn.metrics.pairwise import cosine_similarity
-
     cos_sim = cosine_similarity(user_profile, app.state.modelo_tfidf_mat).flatten()
 
     # Obtenemos los mas similares (ignorando el mismisimo 1.0)
@@ -708,3 +727,93 @@ def recomendar_implicit_endpoint(user_id: int, n: int = 10):
     enriquecer_recomendaciones(predicciones)
 
     return {"recomendaciones": predicciones, "modelo": "Implicit BPR"}
+
+
+##############################################################################################
+#  Recomendación Modelo 6: NCF (Neural Collaborative Filtering)
+##############################################################################################
+
+
+@app.get("/recomendar/ncf/{user_id}")
+def recomendar_ncf_endpoint(user_id: int, n: int = 10):
+    """
+    Endpoint de recomendaciones usando NCF-Lite (GMF + MLP) via ONNX Runtime.
+    El modelo produce logits de relevancia para cada item; se seleccionan los Top-N
+    excluyendo items ya vistos por el usuario.
+    """
+    logger.info(f"Petición NCF para User {user_id}")
+
+    if app.state.modelo_ncf is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Modelo NCF no cargado. Ejecuta modelo_6_ncf.py para generar los artefactos."
+        )
+    if app.state.ncf_user2idx is None or app.state.ncf_item2idx is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Mapeos NCF (user2idx/item2idx) no cargados."
+        )
+
+    # Verificar que el usuario existe en el vocabulario del modelo
+    if user_id not in app.state.ncf_user2idx:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Usuario {user_id} no encontrado en el vocabulario NCF. "
+                   f"Solo usuarios con >= 200 ratings están cubiertos."
+        )
+
+    user_idx = app.state.ncf_user2idx[user_id]
+
+    # Construir mapeos inversos
+    idx2item = {v: k for k, v in app.state.ncf_item2idx.items()}
+    n_items = len(app.state.ncf_item2idx)
+
+    # Puntuar TODOS los items de una sola vez (batch inference via ONNX)
+    try:
+        user_ids_np = np.full(n_items, user_idx, dtype=np.int64)
+        item_ids_np = np.array(list(app.state.ncf_item2idx.values()), dtype=np.int64)
+
+        # La salida de ONNX suele ser (N, 1). La aplanamos a (N,)
+        scores = app.state.modelo_ncf.run(
+            None,
+            {"user_ids": user_ids_np, "item_ids": item_ids_np}
+        )[0].flatten()
+
+        # Excluir items ya vistos
+        if app.state.df_ratings_ia is not None:
+            user_ratings = app.state.df_ratings_ia[app.state.df_ratings_ia["userId"] == user_id]
+            pelis_vistas = set(user_ratings["tmdb_id"].unique())
+            for tid in pelis_vistas:
+                if tid in app.state.ncf_item2idx:
+                    midx = app.state.ncf_item2idx[tid]
+                    # midx es el valor (v) de item2idx
+                    # Queremos poner el score de esa peli a -inf
+                    # Pero OJO: 'scores' está indexado por el orden de 'item_ids_np'
+                    # Como item_ids_np es np.array(list(item2idx.values())), el índice 
+                    # de un midx está en su propia posición si values() es secuencial.
+                    # Para ser 100% seguros, usamos el mapeo directo
+                    scores[midx] = -np.inf
+
+        # Seleccionar Top-N
+        top_indices = np.argsort(scores)[::-1][:n]
+
+        idx2item = {v: k for k, v in app.state.ncf_item2idx.items()}
+        predicciones = []
+        for idx_item in top_indices:
+            if scores[idx_item] == -np.inf:
+                continue
+            tid = idx2item[idx_item]
+            score_puro = float(scores[idx_item])
+            # Transformar logit a rating visual amigable (3.0 - 5.0 rango)
+            rating_ui = min(5.0, max(0.5, 3.5 + (score_puro * 0.3)))
+            predicciones.append(
+                {"tmdb_id": int(tid), "predicted_rating": round(rating_ui, 2)}
+            )
+
+        enriquecer_recomendaciones(predicciones)
+        return {"recomendaciones": predicciones, "modelo": "NCF-Lite"}
+
+    except Exception as e:
+        logger.error(f"Error en recomendación NCF para User {user_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+

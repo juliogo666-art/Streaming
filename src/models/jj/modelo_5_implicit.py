@@ -20,10 +20,16 @@ import pandas as pd
 import numpy as np
 import pickle
 import time
+import sys
+import os
 import json
 from scipy.sparse import csr_matrix
 from implicit.bpr import BayesianPersonalizedRanking
 from implicit.evaluation import precision_at_k, AUC_at_k
+
+# Añadir el directorio raíz al PATH para importar utilidades
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..")))
+from src.utils.registrar_metricas import registrar_metricas
 
 # Rutas de datos
 RUTA_RATINGS = "src/data/ready/ratings_finales_ia.csv"
@@ -187,6 +193,19 @@ if __name__ == "__main__":
         json.dump(metricas, f, indent=4)
 
     print(f"  Modelo salvado en: {RUTA_MODELO}")
+
+    # Registrar métricas en historial CSV
+    registrar_metricas(
+        modelo="Implicit BPR",
+        hiperparams={
+            "n_factores": NUM_COMPONENTES,
+            "n_epocas": NUM_EPOCAS,
+            "learning_rate": LEARNING_RATE,
+            "regularizacion": REGULARIZATION,
+        },
+        metricas=metricas,
+        dataset_size=len(df_ratings),
+    )
 
     # Demo Usuario 1
     print("\n" + "=" * 70)

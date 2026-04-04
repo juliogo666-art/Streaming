@@ -2,7 +2,6 @@ import streamlit as st
 import requests
 import datetime
 
-st.set_page_config(page_title="SPIRE Streaming - Usuario", layout="wide")
 
 # Validar si el usuario está logueado en Streamlit Session State
 if "usuario_autenticado" not in st.session_state:
@@ -292,6 +291,7 @@ else:
             "Wide & Deep (Profundo)",
             "Content-Based (Cold-Start)",
             "Implicit BPR (Ranking Top)",
+            "NCF (Deep Learning)",
         ],
         index=4,  # Ponemos el BPR por defecto porque es el mejor
     )
@@ -301,6 +301,7 @@ else:
         "Wide & Deep (Profundo)": "recomendar/wnd",
         "Content-Based (Cold-Start)": "recomendar/content",
         "Implicit BPR (Ranking Top)": "recomendar/implicit",
+        "NCF (Deep Learning)": "recomendar/ncf",
     }
     endpoint_ia = mapa_endpoints[modelo_ia]
 
@@ -406,12 +407,12 @@ else:
                             if poster and poster != "" and poster != "nan":
                                 st.image(
                                     f"https://image.tmdb.org/t/p/w500{poster}",
-                                    width="stretch",
+                                    use_container_width=True,
                                 )
                             else:
                                 st.image(
                                     "https://via.placeholder.com/300x450.png?text=Sin+Poster",
-                                    width="stretch",
+                                    use_container_width=True,
                                 )
                             titulo_rec = rec.get("titulo", "Sin Título")
                             if len(titulo_rec) > 30:

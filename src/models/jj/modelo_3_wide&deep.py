@@ -47,6 +47,7 @@ try:
     from src.networks.dl.rn_mlp import WideAndDeepModel
 except ImportError:
     from networks.dl.rn_mlp import WideAndDeepModel
+from src.utils.registrar_metricas import registrar_metricas
 
 # -----------------------------------------------------------------------------------------
 # CONFIGURACIÓN GLOBAL
@@ -286,6 +287,22 @@ def entrenar_modelo(df_train, df_test, num_users, num_movies):
     torch.save(model.state_dict(), ruta_modelo)
     tamano_mb = os.path.getsize(ruta_modelo) / (1024 * 1024)
     print(f"\n  Cerebro Wide&Deep guardado en {ruta_modelo} ({tamano_mb:.1f} MB)")
+
+    # 5b. Registrar métricas en historial CSV
+    registrar_metricas(
+        modelo="Wide&Deep",
+        hiperparams={
+            "embedding_dim": 32,
+            "n_epocas": EPOCHS,
+            "learning_rate": LEARNING_RATE,
+            "batch_size": BATCH_SIZE,
+            "hidden_layers": "[64, 32]",
+            "min_ratings_item": MIN_RATINGS_PELICULA,
+        },
+        metricas={"MAE": mae_final, "RMSE": rmse_final},
+        dataset_size=len(df_train) + len(df_test),
+    )
+
     print("=" * 70)
 
 

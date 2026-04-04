@@ -1,1 +1,79 @@
-# 
+# ============================================================================
+# REGLAS DE LIMPIEZA DE DATOS — Pipeline ETL
+# ============================================================================
+# Definimos las transformaciones que se aplican a los datos brutos
+# (raw) antes de insertarlos en la base de datos MySQL.
+# ============================================================================
+
+# --- Columnas y Mapeos ---
+columnas_peliculas:
+  id_origen: "tmdb_id"
+  titulo: "titulo"
+  titulo_original: "original_title"
+  sinopsis: "overview"
+  fecha_estreno: "fecha_estreno"
+  idioma: "original_language"
+  popularidad: "popularity"
+  poster: "poster_path"
+  fondo: "backdrop_path"
+  nota_media: "vote_average"
+  total_votos: "vote_count"
+  adulto: "adult"
+  generos: "genre_ids"
+  video: "video"
+
+columnas_series:
+  id_origen: "tmdb_id"
+  titulo: "titulo"
+  titulo_original: "original_name"
+  sinopsis: "overview"
+  fecha_estreno: "first_air_date"
+  idioma: "original_language"
+  popularidad: "popularity"
+  poster: "poster_path"
+  fondo: "backdrop_path"
+  nota_media: "vote_average"
+  total_votos: "vote_count"
+  adulto: "adult"
+  generos: "genre_ids"
+
+# --- Tratamiento de Valores Nulos ---
+nulos:
+  texto:
+    valor_por_defecto: ""
+    columnas: ["overview", "poster_path", "backdrop_path", "original_language"]
+  numerico:
+    valor_por_defecto: 0
+    columnas: ["popularity", "vote_average", "vote_count"]
+  fecha:
+    valores_nulos: ["", "Desconocida", "null", "None"]
+    accion: "NULL" # Se inserta como NULL en MySQL
+
+# --- Validación de Tipos ---
+tipos:
+  vote_average:
+    tipo: "float"
+    redondeo: 2
+    rango: [0.0, 10.0]
+  popularity:
+    tipo: "float"
+    redondeo: 2
+    rango: [0.0, 999999.0]
+  vote_count:
+    tipo: "int"
+    rango: [0, 999999999]
+  adult:
+    tipo: "bool"
+    mapeo: { "True": 1, "true": 1, "False": 0, "false": 0 }
+
+# --- Limpieza de Géneros ---
+generos:
+  formato_entrada: "string_lista" # Ej: "[28, 12, 878]"
+  parser: "ast.literal_eval"
+  fallback: [] # Si falla el parsing, lista vacía
+
+# --- Filtros de Calidad ---
+filtros:
+  eliminar_duplicados_por: "tmdb_id"
+  encoding_csv: "utf-8-sig"
+  batch_size_importacion: 5000

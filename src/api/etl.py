@@ -14,7 +14,7 @@ def normalizar_datos(fila, tipo):
         generos_raw = fila.get("genre_ids", "[]")
         # Algunos CSV vienen con comillas extra o formatos raros
         generos = ast.literal_eval(generos_raw)
-    except:
+    except Exception:
         generos = []
 
     es_peli = tipo == "movie"

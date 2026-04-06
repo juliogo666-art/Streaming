@@ -19,7 +19,7 @@ RUTA_WND_MAP = "src/models/jj/wnd_mappings.pkl"
 
 RUTAS_PICKLE = [
     "src/models/jj/modelo_1_SVD.pkl",
-    "src/models/jj/modelo_2_knn_cs.pkl",
+    "src/models/jj/modelo_2.5_knn_msd.pkl",
     "src/models/jj/modelo_4_tfidf.pkl",
     "src/models/jj/modelo_4_matriz.pkl",
     "src/models/jj/modelo_4_indices.pkl",
@@ -70,7 +70,7 @@ if os.path.exists(RUTA_WND_PTH) and os.path.exists(RUTA_WND_MAP):
         dummy_user = torch.tensor([0], dtype=torch.long)
         dummy_item = torch.tensor([0], dtype=torch.long)
 
-        print(f"  -> Ejecutando torch.onnx.export()...")
+        print("  -> Ejecutando torch.onnx.export()...")
         torch.onnx.export(
             wnd,
             (dummy_user, dummy_item),  # Entradas

@@ -2,8 +2,12 @@ import pandas as pd
 import numpy as np
 import pickle
 import os
+import sys
 import math
 import onnxruntime as ort
+
+# Añadimos el directorio raíz al PATH para que Python encuentre la carpeta "src"
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
 # ======================================================================================
 # CONFIGURACIÓN DE RUTAS Y CONSTANTES
@@ -13,7 +17,7 @@ RUTA_RATINGS = "src/data/ready/ratings_finales_ia.csv"
 
 # Modelos
 RUTA_SVD = "src/models/jj/modelo_1_SVD.pkl"
-RUTA_KNN = "src/models/jj/modelo_2_knn_cs.pkl"
+RUTA_KNN = "src/models/jj/modelo_2.5_knn_msd.pkl"
 RUTA_WND_ONNX = "src/models/jj/modelo_3_wnd.onnx"
 RUTA_WND_MAP = "src/models/jj/wnd_mappings.pkl"
 RUTA_TFIDF_MOD = "src/models/jj/modelo_4_tfidf.pkl"
@@ -38,60 +42,14 @@ UMBRAL_RELEVANTE = (
 )
 
 # ======================================================================================
-# Definición de metricas de ranking
+# PIPELINES Y MÉTRICAS OOP
 # ======================================================================================
-
-
-def precision_at_k(recomendadas, relevantes):
-    """Mide qué porcentaje de las K sugeridas fueron realmente acertadas."""
-    if not recomendadas:
-        return 0.0
-    aciertos = len(set(recomendadas) & set(relevantes))
-    return aciertos / len(recomendadas)
-
-
-def recall_at_k(recomendadas, relevantes):
-    """Mide cuántas de las pelis que le gustaron fuimos capaces de encontrar."""
-    if not relevantes:
-        return 0.0
-    aciertos = len(set(recomendadas) & set(relevantes))
-    return aciertos / len(relevantes)
-
-
-def coverage(recs_totales, n_catalogo):
-    """Mide qué porcentaje del catálogo total es capaz de recomendar el modelo (Diversidad)."""
-    if n_catalogo == 0:
-        return 0.0
-    unicas_recomendadas = set()
-    for lista in recs_totales:
-        unicas_recomendadas.update(lista)
-    return len(unicas_recomendadas) / n_catalogo
-
-
-def hit_rate(recomendadas, relevantes):
-    """Métrica binaria: ¿Hubo al menos 1 acierto en el Top K? (1 Sí / 0 No)."""
-    return 1 if len(set(recomendadas) & set(relevantes)) > 0 else 0
-
-
-def ndcg_at_k(recomendadas, relevantes_escala):
-    """
-    NDCG (Normalized Discounted Cumulative Gain):
-    Es la métrica más importante. No solo mide si acertamos, sino si pusimos las
-    mejores películas en las primeras posiciones (penaliza si la favorita sale la #10).
-    """
-    dcg = 0.0
-    idcg = 0.0
-    for i, peli in enumerate(recomendadas):
-        if peli in relevantes_escala:
-            relevancia = relevantes_escala[peli]
-            # La importancia decrece logarítmicamente con la posición
-            dcg += relevancia / math.log2(i + 2)
-
-    # IDCG es el "escenario perfecto" para normalizar el resultado entre 0 y 1
-    ideal_relevancias = sorted(list(relevantes_escala.values()), reverse=True)
-    for i, rel in enumerate(ideal_relevancias[: len(recomendadas)]):
-        idcg += rel / math.log2(i + 2)
-    return dcg / idcg if idcg > 0 else 0.0
+from src.pipelines.evaluation_pipeline import EvaluationPipeline
+from src.metrics.precision import PrecisionAtK
+from src.metrics.recall import RecallAtK
+from src.metrics.hitrate import HitRateAtK
+from src.metrics.ndcg import NDCGAtK
+from src.metrics.coverage import CoverageAtK
 
 
 # ======================================================================================
@@ -155,287 +113,406 @@ def cargar_modelos():
 
 def predecir_svd_knn(modelo, user_id, candidatas):
     """Predicción clásica basada en puntuación estimada."""
-    preds = []
-    for tid in candidatas:
-        preds.append((tid, modelo.predict(user_id, tid).est))
-    preds.sort(key=lambda x: x[1], reverse=True)
-    return [p[0] for p in preds[:K]]
+    predicciones = []
+
+    # Para cada película candidata, le pedimos al modelo que adivine la nota
+    for id_peli in candidatas:
+        nota_adivinada = modelo.predict(user_id, id_peli).est
+        predicciones.append((id_peli, nota_adivinada))
+
+    # Ordenamos de nota más alta a más baja
+    predicciones.sort(key=lambda x: x[1], reverse=True)
+
+    # Devolvemos solo las IDs de las 10 mejores
+    return [pelicula[0] for pelicula in predicciones[:K]]
 
 
-def predecir_wnd(sess, maps, user_id, candidatas):
+def predecir_wnd(sesion_modelo, diccionario_mapas, user_id, candidatas):
     """Inferencia Wide & Deep usando ONNX Runtime."""
-    u2idx = maps["user2idx"]
-    m2idx = maps["movie2idx"]
-    if user_id not in u2idx:
+    mapa_usuario = diccionario_mapas["user2idx"]
+    mapa_peli = diccionario_mapas["movie2idx"]
+
+    # Si el modelo nunca vio a este usuario en el entrenamiento, no puede recomendarle nada
+    if user_id not in mapa_usuario:
         return []
-    u_idx = u2idx[user_id]
-    # Filtramos candidatos que el modelo conoce
-    cv = [(tid, m2idx[tid]) for tid in candidatas if tid in m2idx]
-    if not cv:
+
+    id_interno_usuario = mapa_usuario[user_id]
+
+    # Filtramos las películas candidatas, quedándonos solo con las que el modelo conoce
+    candidatas_validas = [
+        (id_tmdb, mapa_peli[id_tmdb]) for id_tmdb in candidatas if id_tmdb in mapa_peli
+    ]
+    if not candidatas_validas:
         return []
-    tids, idxs = zip(*cv)
-    # Batch predict: Evaluamos miles de pelis de golpe
-    u_arr = np.full(len(idxs), u_idx, dtype=np.int64)
-    i_arr = np.array(idxs, dtype=np.int64)
-    scores = sess.run(None, {"user_ids": u_arr, "item_ids": i_arr})[0].flatten()
-    pares = sorted(zip(tids, scores), key=lambda x: x[1], reverse=True)
-    return [p[0] for p in pares[:K]]
+
+    lista_ids_tmdb, lista_ids_internos = zip(*candidatas_validas)
+
+    # Para evaluar rápido con ONNX, creamos dos arrays paralelos.
+    # Ejemplo: Si evaluamos 3 pelis, sería Usuario=[5, 5, 5] Pelis=[12, 45, 87]
+    array_usuarios = np.full(
+        len(lista_ids_internos), id_interno_usuario, dtype=np.int64
+    )
+    array_peliculas = np.array(lista_ids_internos, dtype=np.int64)
+
+    # Le pasamos los arrays al modelo y nos devuelve las puntuaciones de todas de golpe
+    puntuaciones = sesion_modelo.run(
+        None, {"user_ids": array_usuarios, "item_ids": array_peliculas}
+    )[0].flatten()
+
+    # Emparejamos cada película con su puntuación y ordenamos de mejor a peor
+    pares_ordenados = sorted(
+        zip(lista_ids_tmdb, puntuaciones), key=lambda x: x[1], reverse=True
+    )
+
+    return [pelicula[0] for pelicula in pares_ordenados[:K]]
 
 
-def predecir_tt(sess, maps, user_id, candidatas):
+def predecir_tt(sesion_modelo, diccionario_mapas, user_id, candidatas):
     """Inferencia de la arquitectura 'Two Towers' bi-encoder."""
-    u2idx = maps["user2idx"]
-    i2idx = maps["item2idx"]
-    if user_id not in u2idx:
+    mapa_usuario = diccionario_mapas["user2idx"]
+    mapa_peli = diccionario_mapas["item2idx"]
+
+    if user_id not in mapa_usuario:
         return []
-    u_idx = u2idx[user_id]
-    cv = [(tid, i2idx[tid]) for tid in candidatas if tid in i2idx]
-    if not cv:
+
+    id_interno_usuario = mapa_usuario[user_id]
+
+    candidatas_validas = [
+        (id_tmdb, mapa_peli[id_tmdb]) for id_tmdb in candidatas if id_tmdb in mapa_peli
+    ]
+    if not candidatas_validas:
         return []
-    tids, idxs = zip(*cv)
-    u_arr = np.full(len(idxs), u_idx, dtype=np.int64)
-    i_arr = np.array(idxs, dtype=np.int64)
-    # El producto escalar se resuelve dentro del grafo ONNX
-    scores = sess.run(None, {"user_ids": u_arr, "item_ids": i_arr})[0].flatten()
-    pares = sorted(zip(tids, scores), key=lambda x: x[1], reverse=True)
-    return [p[0] for p in pares[:K]]
+
+    lista_ids_tmdb, lista_ids_internos = zip(*candidatas_validas)
+
+    array_usuarios = np.full(
+        len(lista_ids_internos), id_interno_usuario, dtype=np.int64
+    )
+    array_peliculas = np.array(lista_ids_internos, dtype=np.int64)
+
+    # La red neuronal Two Towers calcula la similitud entre el usuario y la peli internamente
+    puntuaciones = sesion_modelo.run(
+        None, {"user_ids": array_usuarios, "item_ids": array_peliculas}
+    )[0].flatten()
+    pares_ordenados = sorted(
+        zip(lista_ids_tmdb, puntuaciones), key=lambda x: x[1], reverse=True
+    )
+
+    return [pelicula[0] for pelicula in pares_ordenados[:K]]
 
 
-def predecir_ncf(sess, u2idx, i2idx, user_id, candidatas):
+def predecir_ncf(sesion_modelo, mapa_usuario, mapa_peli, user_id, candidatas):
     """Neural Collaborative Filtering (GMF + MLP)."""
-    if user_id not in u2idx:
+    if user_id not in mapa_usuario:
         return []
-    u_idx = u2idx[user_id]
-    cv = [(tid, i2idx[tid]) for tid in candidatas if tid in i2idx]
-    if not cv:
+
+    id_interno_usuario = mapa_usuario[user_id]
+
+    candidatas_validas = [
+        (id_tmdb, mapa_peli[id_tmdb]) for id_tmdb in candidatas if id_tmdb in mapa_peli
+    ]
+    if not candidatas_validas:
         return []
-    tids, idxs = zip(*cv)
-    u_arr = np.full(len(idxs), u_idx, dtype=np.int64)
-    i_arr = np.array(list(idxs), dtype=np.int64)
-    scores = sess.run(None, {"user_ids": u_arr, "item_ids": i_arr})[0].flatten()
-    pares = sorted(zip(tids, scores), key=lambda x: x[1], reverse=True)
-    return [p[0] for p in pares[:K]]
+
+    lista_ids_tmdb, lista_ids_internos = zip(*candidatas_validas)
+
+    array_usuarios = np.full(
+        len(lista_ids_internos), id_interno_usuario, dtype=np.int64
+    )
+    array_peliculas = np.array(list(lista_ids_internos), dtype=np.int64)
+
+    puntuaciones = sesion_modelo.run(
+        None, {"user_ids": array_usuarios, "item_ids": array_peliculas}
+    )[0].flatten()
+    pares_ordenados = sorted(
+        zip(lista_ids_tmdb, puntuaciones), key=lambda x: x[1], reverse=True
+    )
+
+    return [pelicula[0] for pelicula in pares_ordenados[:K]]
 
 
-def predecir_content(mat, idxs, user_vistas, candidatas):
-    """Recomendador basado en similitud de coseno sobre TF-IDF."""
+def predecir_content(
+    matriz_distancias, diccionario_indices, historial_vistas, candidatas
+):
+    """Recomendador basado en similitud de coseno sobre TF-IDF (Busca pelis que se parezcan de tramas/género)."""
     from sklearn.metrics.pairwise import cosine_similarity
 
-    if user_vistas.empty:
-        return []
-    # Usamos su película favorita como ancla
-    fav = user_vistas.sort_values(by="rating", ascending=False).iloc[0]
-    tid_fav = int(fav["tmdb_id"])
-    if tid_fav not in idxs:
-        return []
-    idx_fav = idxs[tid_fav]
-    sims = cosine_similarity(mat[idx_fav], mat).flatten()
-    preds = []
-    for tid in candidatas:
-        if tid in idxs:
-            preds.append((tid, sims[idxs[tid]]))
-    preds.sort(key=lambda x: x[1], reverse=True)
-    return [p[0] for p in preds[:K]]
-
-
-def predecir_implicit(mod, dat, user_id, candidatas):
-    """Bayesian Personalized Ranking (BPR) sobre factores latentes."""
-    u2idx = dat["user2idx"]
-    i2idx = dat["item2idx"]
-    idx2i = {v: k for k, v in i2idx.items()}
-
-    if user_id not in u2idx:
+    if historial_vistas.empty:
         return []
 
-    u_idx = u2idx[user_id]
-    uf = np.asarray(mod.user_factors[u_idx])
-    iff = np.asarray(mod.item_factors)
+    # Cogemos la película que mejor nota le ha puesto este usuario (su favorita)
+    peli_favorita = historial_vistas.sort_values(by="rating", ascending=False).iloc[0]
+    id_favorita = int(peli_favorita["tmdb_id"])
 
-    # Cálculo manual del producto escalar para evitar fallos de memoria en Windows
-    scores = uf @ iff.T
-    c_set = set(candidatas)
-    preds = []
-    for midx, s in enumerate(scores):
-        tid = idx2i[midx]
-        if tid in c_set:
-            preds.append((tid, s))
+    if id_favorita not in diccionario_indices:
+        return []
 
-    # Ordenar por el score calculado
-    preds.sort(key=lambda x: x[1], reverse=True)
-    return [p[0] for p in preds[:K]]
+    # Sacamos el vector matemático, la huella dactilar, de su película favorita
+    indice_favorita = diccionario_indices[id_favorita]
+
+    # Comparamos la huella de la favorita con las huellas de TODAS las demás del catálogo
+    similitudes = cosine_similarity(
+        matriz_distancias[indice_favorita], matriz_distancias
+    ).flatten()
+
+    predicciones = []
+    # Nos quedamos solo con las distancias de las películas que no ha visto (candidatas)
+    for id_peli in candidatas:
+        if id_peli in diccionario_indices:
+            parecido = similitudes[diccionario_indices[id_peli]]
+            predicciones.append((id_peli, parecido))
+
+    # Las que más se parezcan (mayor porcentaje de similitud) van primero
+    predicciones.sort(key=lambda x: x[1], reverse=True)
+    return [pelicula[0] for pelicula in predicciones[:K]]
+
+
+def predecir_implicit(modelo, datos, user_id, candidatas):
+    """Bayesian Personalized Ranking (BPR) sobre grupos invisibles matemáticos."""
+    mapa_usuario = datos["user2idx"]
+    mapa_peli = datos["item2idx"]
+    # Creamos un mapa inverso: de indice interno a ID real de TMDB
+    mapa_inverso_peli = {indice: id_tmdb for id_tmdb, indice in mapa_peli.items()}
+
+    if user_id not in mapa_usuario:
+        return []
+
+    id_interno_usuario = mapa_usuario[user_id]
+
+    # Extraemos las "preferencias invisibles" del usuario
+    gustos_usuario = np.asarray(modelo.user_factors[id_interno_usuario])
+    # Extraemos los "rasgos invisibles" de todas las películas
+    rasgos_peliculas = np.asarray(modelo.item_factors)
+
+    # Multiplicamos matemáticamente sus gustos por los rasgos de las pelis para sacar la "afinidad"
+    afinidades = gustos_usuario @ rasgos_peliculas.T
+
+    set_candidatas = set(candidatas)
+    predicciones = []
+
+    for indice_interno, afinidad in enumerate(afinidades):
+        id_tmdb = mapa_inverso_peli[indice_interno]
+        # Si la pelicula no la ha visto, la apuntamos
+        if id_tmdb in set_candidatas:
+            predicciones.append((id_tmdb, afinidad))
+
+    # Ordenamos por las de mayor afinidad
+    predicciones.sort(key=lambda x: x[1], reverse=True)
+    return [pelicula[0] for pelicula in predicciones[:K]]
 
 
 # ---- EVALUACIÓN ----
 
 
 def evaluar():
-    """Ejecuta el protocolo de validación: Ocultar datos reales y medir si la IA los predice."""
+    """
+    Ejecuta el examen final de los modelos.
+    ¿Cómo lo hace?
+    Si el usuario vio 10 películas que le gustaron, ocultamos 2 de ellas.
+    Dejamos que la IA nos recomiende basándose en las 8 restantes,
+    y si adivina alguna de esas 2 que escondimos, ¡bingo, ha acertado!
+    """
     print("\n INICIANDO EVALUACIÓN DEFINITIVA")
     modelos = cargar_modelos()
-    df = pd.read_csv(RUTA_RATINGS, on_bad_lines="skip")
-    df_cat = pd.read_csv(RUTA_CATALOGO)
 
-    # Catálogo de pelis "válidas" (con suficientes votos) para no recomendar basura
-    todas_pelis = (
-        set(df_cat[df_cat["vote_count"] > 100]["tmdb_id"].unique())
-        if "vote_count" in df_cat.columns
-        else set(df_cat["tmdb_id"].unique())
+    # 1. Cargamos el Big Data original
+    df_interacciones = pd.read_csv(RUTA_RATINGS, on_bad_lines="skip")
+    df_catalogo = pd.read_csv(RUTA_CATALOGO)
+
+    # 2. Por limpieza, solo dejamos que el modelo recomiende películas conocidas (> 100 votos)
+    # Así no recomienda basura indie que a nadie le importa.
+    pelis_populares_permitidas = (
+        set(df_catalogo[df_catalogo["vote_count"] > 100]["tmdb_id"].unique())
+        if "vote_count" in df_catalogo.columns
+        else set(df_catalogo["tmdb_id"].unique())
+    )
+    tamano_del_catalogo = len(pelis_populares_permitidas)
+
+    # 3. Preparando la máquina examinadora --> El Pipeline de evaluación
+    # Le cargamos la lista de reglas para puntuar
+    mis_metricas = [
+        PrecisionAtK(user_col="userId", item_col="tmdb_id"),  # Cuántas ha acertado
+        RecallAtK(
+            user_col="userId", item_col="tmdb_id"
+        ),  # Cuánto del total fue capaz de capturar
+        HitRateAtK(
+            user_col="userId", item_col="tmdb_id"
+        ),  # ¿Acertó alguna al menos? (1 = Si, 0 = No)
+        NDCGAtK(
+            user_col="userId", item_col="tmdb_id", rating_col="rating"
+        ),  # ¿Las que acertó las puso de primeras?
+        CoverageAtK(
+            catalog_size=tamano_del_catalogo
+        ),  # ¿Se arriesga con distintas opciones o siempre recomienda Marvel?
+    ]
+    pipeline_juez = EvaluationPipeline(metrics=mis_metricas)
+
+    # 4. Buscamos a los "Cinéfilos" (Usuarios expertos que han visto más de 1000 películas)
+    # Hacerle un examen a un usuario que solo ha visto 2 películas no tiene sentido lógico.
+    conteo_vistas = df_interacciones.groupby("userId").size()
+    usuarios_expertos = conteo_vistas[conteo_vistas >= 1000].index.tolist()
+
+    # Elegimos usuarios al azar de entre los expertos, para no freir el PC en tiempo
+    usuarios_test = np.random.choice(
+        usuarios_expertos, min(len(usuarios_expertos), NUM_USUARIOS), replace=False
     )
 
-    # Elegimos usuarios con historial rico para un benchmark exigente
-    counts = df.groupby("userId").size()
-    core_users = counts[counts >= 1000].index.tolist()
-    u_eval = np.random.choice(
-        core_users, min(len(core_users), NUM_USUARIOS), replace=False
-    )
+    # Indexamos por usuario para buscar rápido (Optimización de velocidad)
+    df_busqueda_rapida = df_interacciones.set_index("userId")
 
-    # Optimizacion O(1): Indexar el dataset por userId para búsquedas ultra rápidas
-    df_idx = df.set_index("userId")
+    # Aquí guardaremos el "Examen" oficial (los datos ocultos) de todos los usuarios juntos
+    lista_respuestas_examen = []
 
-    # Contenedores para métricas acumuladas
-    res = {
-        m: {"p": 0, "r": 0, "n": 0, "h": 0, "recs": []}
-        for m in ["SVD", "KNN", "WND", "TFIDF", "IMP", "NCF", "TT"]
+    # Aquí guardaremos lo que responde la IA en el examen. Un diccionario por cada inteligencia.
+    respuestas_de_la_ia = {
+        m: {}
+        for m in ["SVD", "KNN", "WND_ONNX", "TFIDF_MAT", "IMP", "NCF_ONNX", "TT_ONNX"]
     }
-    n_final = 0
 
-    print(f"  Analizando {len(u_eval)} usuarios expertos...")
-    for u in u_eval:
+    print(
+        f"  Empezando el test de Inteligencia Artificial para {len(usuarios_test)} usuarios cinéfilos..."
+    )
+
+    # Empezamos el bucle, usuario a usuario
+    for id_usuario in usuarios_test:
         try:
-            # 1. Obtener historial del usuario
-            ud = df_idx.loc[[u]].reset_index()
-            rel = ud[ud["rating"] >= UMBRAL_RELEVANTE]
-            if len(rel) < 5:
+            # A) Buscamos su libreta de películas vistas
+            historial = df_busqueda_rapida.loc[[id_usuario]].reset_index()
+
+            # Filtramos solo las que le encantaron (nota >= 4.0). De descartamos lo irrelevante.
+            pelis_que_le_fascinan = historial[historial["rating"] >= UMBRAL_RELEVANTE]
+            if len(pelis_que_le_fascinan) < 5:
                 continue
 
-            # 2. GROUND TRUTH: Ocultamos el 20% de lo que le gustó para usarlo como 'examen'
-            oculto = rel.sample(frac=0.2, random_state=42)
-            vistas = ud.drop(oculto.index)
+            # B) Cogemos el 20% al azar y las "tapamos"
+            pelis_escondidas = pelis_que_le_fascinan.sample(frac=0.2, random_state=42)
+            lista_respuestas_examen.append(pelis_escondidas)
 
-            # El diccionario GT tiene los IDs que la IA deberia adivinar
-            gt_dict = {row["tmdb_id"]: row["rating"] for _, row in oculto.iterrows()}
-            gt_list = list(gt_dict.keys())
+            # Lo que le damos al modelo son las que "No hemos escondido"
+            historial_visible = historial.drop(pelis_escondidas.index)
 
-            # Candidatas: El resto del catálogo que el usuario no ha visto aún
-            cands = todas_pelis - set(vistas["tmdb_id"].unique())
+            # Y las "posibles respuestas" (candidatas) son TODAS las pelis del mundo, restando las que ya hemos visto claramente.
+            peliculas_candidatas_para_recomendar = pelis_populares_permitidas - set(
+                historial_visible["tmdb_id"].unique()
+            )
 
-            # 3. Lanzar predicciones y acumular metricas
-            # Se repite para cada modelo cargado
+            # C) HORA DEL EXAMEN: Llamamos a todos los modelos para que hagan sus apuestas de Recomendación
             if "SVD" in modelos:
-                t = predecir_svd_knn(modelos["SVD"], u, cands)
-                res["SVD"]["p"] += precision_at_k(t, gt_list)
-                res["SVD"]["r"] += recall_at_k(t, gt_list)
-                res["SVD"]["n"] += ndcg_at_k(t, gt_dict)
-                res["SVD"]["h"] += hit_rate(t, gt_list)
-                res["SVD"]["recs"].append(t)
+                respuestas_de_la_ia["SVD"][id_usuario] = predecir_svd_knn(
+                    modelos["SVD"], id_usuario, peliculas_candidatas_para_recomendar
+                )
 
             if "KNN" in modelos:
-                t = predecir_svd_knn(modelos["KNN"], u, cands)
-                res["KNN"]["p"] += precision_at_k(t, gt_list)
-                res["KNN"]["r"] += recall_at_k(t, gt_list)
-                res["KNN"]["n"] += ndcg_at_k(t, gt_dict)
-                res["KNN"]["h"] += hit_rate(t, gt_list)
-                res["KNN"]["recs"].append(t)
+                respuestas_de_la_ia["KNN"][id_usuario] = predecir_svd_knn(
+                    modelos["KNN"], id_usuario, peliculas_candidatas_para_recomendar
+                )
 
             if "WND_ONNX" in modelos:
-                t = predecir_wnd(modelos["WND_ONNX"], modelos["WND_MAPS"], u, cands)
-                res["WND"]["p"] += precision_at_k(t, gt_list)
-                res["WND"]["r"] += recall_at_k(t, gt_list)
-                res["WND"]["n"] += ndcg_at_k(t, gt_dict)
-                res["WND"]["h"] += hit_rate(t, gt_list)
-                res["WND"]["recs"].append(t)
+                respuestas_de_la_ia["WND_ONNX"][id_usuario] = predecir_wnd(
+                    modelos["WND_ONNX"],
+                    modelos["WND_MAPS"],
+                    id_usuario,
+                    peliculas_candidatas_para_recomendar,
+                )
 
             if "TFIDF_MAT" in modelos:
-                t = predecir_content(
-                    modelos["TFIDF_MAT"], modelos["TFIDF_IDX"], vistas, cands
+                respuestas_de_la_ia["TFIDF_MAT"][id_usuario] = predecir_content(
+                    modelos["TFIDF_MAT"],
+                    modelos["TFIDF_IDX"],
+                    historial_visible,
+                    peliculas_candidatas_para_recomendar,
                 )
-                res["TFIDF"]["p"] += precision_at_k(t, gt_list)
-                res["TFIDF"]["r"] += recall_at_k(t, gt_list)
-                res["TFIDF"]["n"] += ndcg_at_k(t, gt_dict)
-                res["TFIDF"]["h"] += hit_rate(t, gt_list)
-                res["TFIDF"]["recs"].append(t)
 
             if "IMP" in modelos:
-                # Corregimos BPR que generaba error de variable
-                u2idx_imp = modelos["IMP_DAT"]["user2idx"]
-                i2idx_imp = modelos["IMP_DAT"]["item2idx"]
-                idx2i_imp = {v: k for k, v in i2idx_imp.items()}
-                u_idx_imp = u2idx_imp[u]
-                uf = np.asarray(modelos["IMP"].user_factors[u_idx_imp])
-                iff = np.asarray(modelos["IMP"].item_factors)
-                scores_imp = uf @ iff.T
-                pares_imp = sorted(
-                    [
-                        (idx2i_imp[mi], sc)
-                        for mi, sc in enumerate(scores_imp)
-                        if idx2i_imp[mi] in cands
-                    ],
-                    key=lambda x: x[1],
-                    reverse=True,
-                )
-                t = [p[0] for p in pares_imp[:K]]
-                res["IMP"]["p"] += precision_at_k(t, gt_list)
-                res["IMP"]["r"] += recall_at_k(t, gt_list)
-                res["IMP"]["n"] += ndcg_at_k(t, gt_dict)
-                res["IMP"]["h"] += hit_rate(t, gt_list)
-                res["IMP"]["recs"].append(t)
+                # Código extraído porque el BPR implícito funciona con tensores matemáticos diferentes
+                mapa_usuarios_imp = modelos["IMP_DAT"]["user2idx"]
+                mapa_pelis_imp = modelos["IMP_DAT"]["item2idx"]
+                mapa_inverso_imp = {v: k for k, v in mapa_pelis_imp.items()}
+
+                if id_usuario in mapa_usuarios_imp:
+                    idx_interno_usuario = mapa_usuarios_imp[id_usuario]
+                    gustos = np.asarray(
+                        modelos["IMP"].user_factors[idx_interno_usuario]
+                    )
+                    peli_rasgos = np.asarray(modelos["IMP"].item_factors)
+                    puntuaciones = gustos @ peli_rasgos.T
+
+                    # Filtramos quedándonos solo las candidatas factibles
+                    posibles = sorted(
+                        [
+                            (mapa_inverso_imp[idx], punto)
+                            for idx, punto in enumerate(puntuaciones)
+                            if mapa_inverso_imp[idx]
+                            in peliculas_candidatas_para_recomendar
+                        ],
+                        key=lambda x: x[1],
+                        reverse=True,
+                    )
+                    respuestas_de_la_ia["IMP"][id_usuario] = [
+                        p[0] for p in posibles[:K]
+                    ]
 
             if "NCF_ONNX" in modelos:
-                t = predecir_ncf(
-                    modelos["NCF_ONNX"], modelos["NCF_U"], modelos["NCF_I"], u, cands
+                respuestas_de_la_ia["NCF_ONNX"][id_usuario] = predecir_ncf(
+                    modelos["NCF_ONNX"],
+                    modelos["NCF_U"],
+                    modelos["NCF_I"],
+                    id_usuario,
+                    peliculas_candidatas_para_recomendar,
                 )
-                res["NCF"]["p"] += precision_at_k(t, gt_list)
-                res["NCF"]["r"] += recall_at_k(t, gt_list)
-                res["NCF"]["n"] += ndcg_at_k(t, gt_dict)
-                res["NCF"]["h"] += hit_rate(t, gt_list)
-                res["NCF"]["recs"].append(t)
 
             if "TT_ONNX" in modelos:
-                t = predecir_tt(modelos["TT_ONNX"], modelos["TT_MAPS"], u, cands)
-                res["TT"]["p"] += precision_at_k(t, gt_list)
-                res["TT"]["r"] += recall_at_k(t, gt_list)
-                res["TT"]["n"] += ndcg_at_k(t, gt_dict)
-                res["TT"]["h"] += hit_rate(t, gt_list)
-                res["TT"]["recs"].append(t)
+                respuestas_de_la_ia["TT_ONNX"][id_usuario] = predecir_tt(
+                    modelos["TT_ONNX"],
+                    modelos["TT_MAPS"],
+                    id_usuario,
+                    peliculas_candidatas_para_recomendar,
+                )
 
-            n_final += 1
-        except:
+        except Exception as error_escondido:
+            # Si falla un usuario, pasamos silenciosamente al siguiente
             continue
 
     # ======================================================================================
-    # Reporte final y exportación
+    # Computación de Métricas en Batch con el Pipeline
     # ======================================================================================
-    print("\n RESULTADOS FINALES (Promedio):")
-    records = []
-    cat_n = len(todas_pelis)
-    for m, v in res.items():
-        if not v["recs"]:
+    # Juntamos los "Exámenes oficiales" sueltos de cada usuario en un mega-examen (un solo DataFrame)
+    mega_examen_oficial = pd.concat(lista_respuestas_examen, ignore_index=True)
+
+    print("\n Pasándole los exámenes al Tribunal (Pipeline OOP)...")
+
+    # Para que en la web los nombres queden bonitos, mapeamos código
+    nombres_comerciales = {
+        "SVD": "SVD",
+        "KNN": "KNN Clásico",
+        "WND_ONNX": "Wide&Deep (Red Neuronal)",
+        "TFIDF_MAT": "Recomendación Basada en la Trama (TF-IDF)",
+        "IMP": "Filtrado Implícito (BPR)",
+        "NCF_ONNX": "Red Neuronal NCF-Lite",
+        "TT_ONNX": "Two-Towers Bi-Encoder",
+    }
+
+    # Le damos a revisar al Tribunal modelo por modelo
+    for id_del_modelo, predicciones_modelo in respuestas_de_la_ia.items():
+        if not predicciones_modelo:
             continue
-        # Promediar métricas por el número de usuarios evaluados
-        p, r, n, h, c = (
-            v["p"] / n_final,
-            v["r"] / n_final,
-            v["n"] / n_final,
-            v["h"] / n_final,
-            coverage(v["recs"], cat_n),
-        )
-        print(
-            f"  {m:<6} | Prec: {p * 100:4.1f}% | NDCG: {n:.3f} | Hit: {h * 100:4.1f}%"
-        )
-        records.append(
-            {
-                "Modelo": m,
-                "Precision_10": p,
-                "Recall_10": r,
-                "NDCG_10": n,
-                "Hit_Rate_10": h,
-                "Coverage_10": c,
-            }
+
+        nombre_bonito = nombres_comerciales[id_del_modelo]
+
+        # Le decimos al sistema central: "Evalúa este modelo dadas sus respuestas y las correctas"
+        pipeline_juez.evaluate_model(
+            nombre_bonito, predicciones_modelo, mega_examen_oficial, k=K
         )
 
-    # Guardamos para que el Admin Panel lo muestre en la web
-    pd.DataFrame(records).to_csv(RUTA_RESULTADOS, index=False)
-    print(f"\n Informe guardado en: {RUTA_RESULTADOS}")
+    # El tribunal escupe el tablero de puntuaciones limpio
+    dataframe_resultados_finales = pipeline_juez.get_summary_dataframe()
+
+    print("\n RESULTADOS FINALES:")
+    print(dataframe_resultados_finales.to_markdown(index=False))
+
+    # Lo exportamos a Excel/CSV para que la APP lo enseñe en Streamlit
+    dataframe_resultados_finales.to_csv(RUTA_RESULTADOS, index=False)
+    print(f"\n Informe final generado y guardado en: {RUTA_RESULTADOS}")
 
 
 if __name__ == "__main__":

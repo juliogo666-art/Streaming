@@ -5,6 +5,12 @@ from fastapi import FastAPI, HTTPException
 from .database import get_db_connection
 from .etl import ejecutar_importacion, limpiar_tablas_contenido
 from ..schemas.schemas import LoginRequest, RegisterRequest
+# [PASO 1: SCHEMAS] Definimos la salida estricta de la API para que frontend no falle
+from src.schemas.recommendation import RecommendationResponse
+
+# [PASO 2: TRACKING] Importamos el logger para guardar el historial de recomendaciones en JSONL
+from src.tracking.logger import RecommendationLogger
+
 import pandas as pd
 import numpy as np
 import bcrypt
@@ -35,7 +41,7 @@ ruta_catalogo = "src/data/ready/dataset_final_movies.csv"
 
 # --- RUTAS DE MODELOS (Sincronizadas con disco) ---
 ruta_modelo_svd = "src/models/jj/modelo_1_SVD.joblib"
-ruta_modelo_knn = "src/models/jj/modelo_2_knn_cs.joblib"
+ruta_modelo_knn = "src/models/jj/modelo_2.5_knn_msd.joblib"
 ruta_modelo_wnd = "src/models/jj/modelo_3_wnd.onnx"
 ruta_wnd_map = "src/models/jj/wnd_mappings.pkl"
 ruta_tfidf_mat = "src/models/jj/modelo_4_matriz.joblib"
@@ -171,6 +177,10 @@ async def lifespan(the_app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+
+# Instanciamos el logger de telemetría (se guardará en logs/recommendations.jsonl)
+# Esto nos servirá para analizar a posteriori qué se ha estado recomendando y a quién.
+telemetria = RecommendationLogger()
 
 
 @app.get("/status")
@@ -374,8 +384,8 @@ def register(datos: RegisterRequest):
 
 
 
-@app.get("/recomendar/svd/{user_id}")
-@app.get("/recomendar/{user_id}")
+@app.get("/recomendar/svd/{user_id}", response_model=RecommendationResponse)
+@app.get("/recomendar/{user_id}", response_model=RecommendationResponse)
 def recomendar_peliculas(user_id: int, n: int = 10):
     """
     Endpoint que devuelve las top-N películas recomendadas para un usuario.
@@ -431,6 +441,9 @@ def recomendar_peliculas(user_id: int, n: int = 10):
     # 6. Enriquecemos con datos del catálogo
     enriquecer_recomendaciones(top_n)
 
+    # Telemetría: Registra un evento en disco de la recomendación servida
+    telemetria.log_recommendations(str(user_id), "SVD (Surprise)", top_n)
+
     return {"recomendaciones": top_n, "modelo": "SVD (Surprise)"}
 
 
@@ -464,7 +477,7 @@ def enriquecer_recomendaciones(recomendaciones):
 ##############################################################################################
 
 
-@app.get("/recomendar/knn/{user_id}")
+@app.get("/recomendar/knn/{user_id}", response_model=RecommendationResponse)
 def recomendar_knn(user_id: int, n: int = 10):
     """Endpoint de recomendaciones usando KNN + Cosine Similarity (Modelo 2)."""
     print(f"DEBUG: Petición KNN para User {user_id}")
@@ -511,6 +524,9 @@ def recomendar_knn(user_id: int, n: int = 10):
     top_n = predicciones[:n]
     enriquecer_recomendaciones(top_n)
 
+    # Telemetría: Registra un evento en disco de la recomendación servida
+    telemetria.log_recommendations(str(user_id), "KNN+Cosine", top_n)
+
     return {"recomendaciones": top_n, "modelo": "KNN+Cosine"}
 
 
@@ -519,7 +535,7 @@ def recomendar_knn(user_id: int, n: int = 10):
 ##############################################################################################
 
 
-@app.get("/recomendar/wnd/{user_id}")
+@app.get("/recomendar/wnd/{user_id}", response_model=RecommendationResponse)
 def recomendar_wnd_endpoint(user_id: int, n: int = 10):
     """Endpoint de recomendaciones usando Wide & Deep Neural Network (ONNX Native)."""
     print(f"DEBUG: Petición Wide&Deep para User {user_id}")
@@ -597,6 +613,9 @@ def recomendar_wnd_endpoint(user_id: int, n: int = 10):
     top_n = predicciones[:n]
     enriquecer_recomendaciones(top_n)
 
+    # Telemetría: Registra un evento en disco de la recomendación servida
+    telemetria.log_recommendations(str(user_id), "Wide&Deep (ONNX)", top_n)
+
     return {"recomendaciones": top_n, "modelo": "Wide&Deep (ONNX)"}
 
 
@@ -605,7 +624,7 @@ def recomendar_wnd_endpoint(user_id: int, n: int = 10):
 ##############################################################################################
 
 
-@app.get("/recomendar/content/{user_id}")
+@app.get("/recomendar/content/{user_id}", response_model=RecommendationResponse)
 def recomendar_content_endpoint(user_id: int, n: int = 10):
     """Endpoint de recomendaciones por contenido (Modelo 4)."""
     print(f"DEBUG: Petición Content-Based para User {user_id}")
@@ -639,6 +658,10 @@ def recomendar_content_endpoint(user_id: int, n: int = 10):
             )
 
         enriquecer_recomendaciones(recomendaciones)
+
+        # Telemetría: Registra evento
+        telemetria.log_recommendations(str(user_id), "TF-IDF (Cold Start Populares)", recomendaciones)
+
         return {
             "recomendaciones": recomendaciones,
             "modelo": "TF-IDF (Cold Start Populares)",
@@ -681,6 +704,10 @@ def recomendar_content_endpoint(user_id: int, n: int = 10):
         )
 
     enriquecer_recomendaciones(predicciones)
+
+    # Telemetría: Registra evento
+    telemetria.log_recommendations(str(user_id), "Content-Based", predicciones)
+
     return {"recomendaciones": predicciones, "modelo": "Content-Based"}
 
 
@@ -689,7 +716,7 @@ def recomendar_content_endpoint(user_id: int, n: int = 10):
 ##############################################################################################
 
 
-@app.get("/recomendar/implicit/{user_id}")
+@app.get("/recomendar/implicit/{user_id}", response_model=RecommendationResponse)
 def recomendar_implicit_endpoint(user_id: int, n: int = 10):
     """Endpoint de recomendaciones usando filtrado colaborativo BPR de la librería implicit."""
     print(f"DEBUG: Petición Implicit BPR para User {user_id}")
@@ -751,6 +778,9 @@ def recomendar_implicit_endpoint(user_id: int, n: int = 10):
 
     enriquecer_recomendaciones(predicciones)
 
+    # Telemetría: Registra evento
+    telemetria.log_recommendations(str(user_id), "Implicit BPR", predicciones)
+
     return {"recomendaciones": predicciones, "modelo": "Implicit BPR"}
 
 
@@ -759,7 +789,7 @@ def recomendar_implicit_endpoint(user_id: int, n: int = 10):
 ##############################################################################################
 
 
-@app.get("/recomendar/ncf/{user_id}")
+@app.get("/recomendar/ncf/{user_id}", response_model=RecommendationResponse)
 def recomendar_ncf_endpoint(user_id: int, n: int = 10):
     """
     Endpoint de recomendaciones usando NCF-Lite (GMF + MLP) via ONNX Runtime.
@@ -839,6 +869,10 @@ def recomendar_ncf_endpoint(user_id: int, n: int = 10):
             )
 
         enriquecer_recomendaciones(predicciones)
+
+        # Telemetría: Registra evento
+        telemetria.log_recommendations(str(user_id), "NCF-Lite", predicciones)
+
         return {"recomendaciones": predicciones, "modelo": "NCF-Lite"}
 
     except Exception as e:
@@ -851,7 +885,7 @@ def recomendar_ncf_endpoint(user_id: int, n: int = 10):
 ##############################################################################################
 
 
-@app.get("/recomendar/twotowers/{user_id}")
+@app.get("/recomendar/twotowers/{user_id}", response_model=RecommendationResponse)
 def recomendar_tt_endpoint(user_id: int, n: int = 10):
     """Endpoint de recomendaciones usando Two Towers Neural Network (ONNX)."""
     logger.info(f"Petición TwoTowers para User {user_id}")
@@ -910,5 +944,9 @@ def recomendar_tt_endpoint(user_id: int, n: int = 10):
         predicciones.append({"tmdb_id": int(tid), "predicted_rating": round(rating_ui, 2)})
 
     enriquecer_recomendaciones(predicciones)
+
+    # Telemetría: Registra evento
+    telemetria.log_recommendations(str(user_id), "Two-Towers", predicciones)
+
     return {"recomendaciones": predicciones, "modelo": "Two-Towers"}
 

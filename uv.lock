@@ -1494,6 +1494,12 @@ wheels = [
 ]
 
 [[package]]
+name = "pipelines"
+version = "0.0.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/cc/b8/9fa3242773c00285e077875839059103132d93e407e61f111d26cc856b6b/pipelines-0.0.1.tar.gz", hash = "sha256:5f659bb38af6950d1930b9cecc332eca33ef3ad17f081db1e0cd0386ef1538a5", size = 8743, upload-time = "2016-05-13T10:33:34.878Z" }
+
+[[package]]
 name = "protobuf"
 version = "6.33.5"
 source = { registry = "https://pypi.org/simple" }
@@ -1527,6 +1533,7 @@ dependencies = [
     { name = "onnx", version = "1.21.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.13'" },
     { name = "onnxruntime" },
     { name = "onnxscript" },
+    { name = "pipelines" },
     { name = "pydantic" },
     { name = "requests" },
     { name = "scikit-learn" },
@@ -1552,6 +1559,7 @@ requires-dist = [
     { name = "onnx", specifier = ">=1.19.0" },
     { name = "onnxruntime", specifier = ">=1.24.4" },
     { name = "onnxscript", specifier = ">=0.5.0" },
+    { name = "pipelines", specifier = ">=0.0.1" },
     { name = "pydantic", specifier = ">=2.12.5" },
     { name = "requests", specifier = ">=2.32.5" },
     { name = "scikit-learn", specifier = ">=1.8.0" },

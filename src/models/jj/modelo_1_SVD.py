@@ -22,7 +22,9 @@ import sys
 import time
 
 # Añadir el directorio raíz al PATH para importar utilidades
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..")))
+sys.path.insert(
+    0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+)
 from src.utils.registrar_metricas import registrar_metricas
 
 from surprise import SVD, Dataset, Reader
@@ -49,7 +51,7 @@ min_ratings_por_usuario = 20
 n_factores = 100
 
 # Número de épocas (pasadas completas sobre los datos durante el entrenamiento).
-n_epocas = 20
+n_epocas = 30
 
 # Tasa de aprendizaje: cuánto se ajustan los pesos en cada paso.
 learning_rate = 0.005
@@ -260,7 +262,6 @@ def cargar_modelo_guardado():
 ##############################################################################################
 #  PRINCIPAL: Se ejecuta directamente
 
-#   Comando: python src/models/jj/modelo_1_SVD.py
 ##############################################################################################
 
 if __name__ == "__main__":

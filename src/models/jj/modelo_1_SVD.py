@@ -18,7 +18,14 @@
 import pandas as pd
 import pickle
 import os
+import sys
 import time
+
+# Añadir el directorio raíz al PATH para importar utilidades
+sys.path.insert(
+    0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+)
+from src.utils.registrar_metricas import registrar_metricas
 
 from surprise import SVD, Dataset, Reader
 from surprise.model_selection import train_test_split
@@ -44,7 +51,7 @@ min_ratings_por_usuario = 20
 n_factores = 100
 
 # Número de épocas (pasadas completas sobre los datos durante el entrenamiento).
-n_epocas = 20
+n_epocas = 30
 
 # Tasa de aprendizaje: cuánto se ajustan los pesos en cada paso.
 learning_rate = 0.005
@@ -255,7 +262,6 @@ def cargar_modelo_guardado():
 ##############################################################################################
 #  PRINCIPAL: Se ejecuta directamente
 
-#   Comando: python src/models/jj/modelo_1_SVD.py
 ##############################################################################################
 
 if __name__ == "__main__":
@@ -267,6 +273,20 @@ if __name__ == "__main__":
 
     # Paso 3: Guardar el modelo entrenado para el Backend
     guardar_modelo(modelo)
+
+    # Paso 3b: Registrar métricas en historial CSV
+    registrar_metricas(
+        modelo="SVD",
+        hiperparams={
+            "n_factores": n_factores,
+            "n_epocas": n_epocas,
+            "learning_rate": learning_rate,
+            "regularizacion": regularizacion,
+            "min_ratings_user": min_ratings_por_usuario,
+        },
+        metricas={"MAE": mae, "RMSE": rmse},
+        dataset_size=len(df),
+    )
 
     # Paso 4: Demo rápida — Probamos recomendaciones para un usuario de ejemplo
     print("\n" + "=" * 70)
@@ -295,7 +315,7 @@ if __name__ == "__main__":
             # Truncamos títulos largos para que queden bonitos
             if len(titulo) > 42:
                 titulo = titulo[:39] + "..."
-            print(f"  {i:<5} {titulo:<45} ⭐ {rec['predicted_rating']}")
+            print(f"  {i:<5} {titulo:<45} - estrellas - {rec['predicted_rating']}")
     except Exception:
         # Si no tenemos el catálogo, mostramos solo los IDs
         for i, rec in enumerate(recomendaciones, 1):

@@ -32,7 +32,12 @@
 import pandas as pd
 import pickle
 import os
+import sys
 import time
+
+# Añadir el directorio raíz al PATH para importar utilidades
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..")))
+from src.utils.registrar_metricas import registrar_metricas
 
 from surprise import KNNBasic, Dataset, Reader
 from surprise.model_selection import train_test_split
@@ -208,6 +213,18 @@ if __name__ == "__main__":
     df = cargar_datos()
     modelo, rmse, mae = entrenar_modelo(df)
     guardar_modelo(modelo)
+
+    # Registrar métricas en historial CSV
+    registrar_metricas(
+        modelo="KNN+Cosine",
+        hiperparams={
+            "k_vecinos": k_vecinos,
+            "min_ratings_user": min_ratings_por_usuario,
+            "min_ratings_item": min_ratings_por_pelicula,
+        },
+        metricas={"MAE": mae, "RMSE": rmse},
+        dataset_size=len(df),
+    )
 
     print("\n" + "=" * 70)
     print("  DEMO: Recomendaciones para el Usuario 1")

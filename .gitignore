@@ -208,6 +208,16 @@ __marimo__/
 
 
 # csv massivos GitHub no tolera
+src/data/raw/movielens/*.csv
+
+
+src/data/raw/tmdb/series/*
+src/data/raw/tmdb/movies/*
+
+src/data/clean/*.csv
+
+src/data/ready/*.csv
+
 *.csv
 *.json
 *.jsonl
@@ -219,6 +229,8 @@ __marimo__/
 # Modelos entrenados (pesan demasiado para GitHub, se regeneran con los scripts)
 *.pkl
 *.pth
+*.joblib
+*.onnx
 
 # Acciones de maquina para verificar
 machine_check/

@@ -1,41 +1,186 @@
+from contextlib import asynccontextmanager
+import logging
+
 from fastapi import FastAPI, HTTPException
 from .database import get_db_connection
 from .etl import ejecutar_importacion, limpiar_tablas_contenido
-import csv
+from ..schemas.schemas import LoginRequest, RegisterRequest
+# [PASO 1: SCHEMAS] Definimos la salida estricta de la API para que frontend no falle
+from src.schemas.recommendation import RecommendationResponse
+
+# [PASO 2: TRACKING] Importamos el logger para guardar el historial de recomendaciones en JSONL
+from src.tracking.logger import RecommendationLogger
+
 import pandas as pd
 import numpy as np
-from pydantic import BaseModel
 import bcrypt
-import pickle
 import os
+from sklearn.metrics.pairwise import cosine_similarity
 
-# --- Wide & Deep: importamos PyTorch si está disponible (opcional) ---
 try:
-    import torch
+    import onnxruntime as ort
 
-    try:
-        from networks.dl.rn_mlp import WideAndDeepModel
-
-        print("[WnD] WideAndDeepModel importado desde 'networks.dl.rn_mlp'")
-    except ImportError as e1:
-        print(f"[WnD] Import 1 fallido: {e1}")
-        try:
-            from src.networks.dl.rn_mlp import WideAndDeepModel
-
-            print("[WnD] WideAndDeepModel importado desde 'src.networks.dl.rn_mlp'")
-        except ImportError as e2:
-            print(f"[WnD] Import 2 fallido: {e2} -> WideAndDeepModel = None")
-            WideAndDeepModel = None
-    TORCH_DISPONIBLE = True
-    print(
-        f"[WnD] PyTorch {torch.__version__} disponible. WideAndDeepModel={'OK' if WideAndDeepModel else 'None'}"
-    )
+    ONNX_DISPONIBLE = True
+    print(f"[WnD] ONNX Runtime {ort.__version__} disponible.")
 except ImportError as e:
-    print(f"[WnD] PyTorch no instalado: {e}")
-    TORCH_DISPONIBLE = False
-    WideAndDeepModel = None
+    print(f"[WnD] onnxruntime no instalado: {e}")
+    ONNX_DISPONIBLE = False
 
-app = FastAPI()
+# --- Configuración de Logging Estructurado ---
+log_handler = logging.FileHandler("logs/backend.log", encoding="utf-8")
+log_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+logger = logging.getLogger("streaming_api")
+logger.addHandler(log_handler)
+logger.addHandler(logging.StreamHandler())
+logger.setLevel(logging.INFO)
+
+# --- CONFIGURACIÓN DE RUTAS Y ESTADO ---
+# Ruta al modelo SVD entrenado y al CSV de ratings, para saber qué pelis ya ha visto el usuario.
+ruta_ratings = "src/data/ready/ratings_finales_ia.csv"
+ruta_catalogo = "src/data/ready/dataset_final_movies.csv"
+
+# --- RUTAS DE MODELOS (Sincronizadas con disco) ---
+ruta_modelo_svd = "src/models/jj/modelo_1_SVD.joblib"
+ruta_modelo_knn = "src/models/jj/modelo_2.5_knn_msd.joblib"
+ruta_modelo_wnd = "src/models/jj/modelo_3_wnd.onnx"
+ruta_wnd_map = "src/models/jj/wnd_mappings.pkl"
+ruta_tfidf_mat = "src/models/jj/modelo_4_matriz.joblib"
+ruta_tfidf_idx = "src/models/jj/modelo_4_indices.joblib"
+ruta_imp = "src/models/jj/modelo_5_implicit.pkl"
+ruta_imp_dat = "src/models/jj/modelo_5_implicit_dataset.pkl"
+ruta_modelo_ncf = "src/models/jj/modelo_6_ncf.onnx"
+ruta_ncf_user2idx = "src/models/jj/ncf_user2idx.json"
+ruta_ncf_item2idx = "src/models/jj/ncf_item2idx.json"
+ruta_modelo_tt = "src/models/jj/modelo_7_twotowers.onnx"
+ruta_tt_map = "src/models/jj/twotowers_mappings.pkl"
+
+
+@asynccontextmanager
+async def lifespan(the_app: FastAPI):
+    """Gestiona el ciclo de vida de la aplicación: carga modelos al arrancar, limpia al cerrar."""
+    logger.info("[STARTUP] Iniciando carga de modelos de IA en memoria...")
+    logger.info("[INFO] Cargando ratings (434MB)... espera unos 30-40s.")
+
+    # --- Inicialización de estado ---
+    the_app.state.modelo_svd = None
+    the_app.state.df_ratings_ia = None
+    the_app.state.df_catalogo = None
+    the_app.state.modelo_knn = None
+    the_app.state.modelo_wnd = None
+    the_app.state.wnd_mappings = None
+    the_app.state.modelo_tfidf_mat = None
+    the_app.state.modelo_tfidf_idx = None
+    the_app.state.modelo_imp = None
+    the_app.state.modelo_imp_dat = None
+    the_app.state.modelo_ncf = None
+    the_app.state.ncf_user2idx = None
+    the_app.state.ncf_item2idx = None
+    the_app.state.modelo_tt = None
+    the_app.state.tt_mappings = None
+
+    # --- Modelo 1: SVD ---
+    if os.path.exists(ruta_modelo_svd):
+        try:
+            import joblib
+            the_app.state.modelo_svd = joblib.load(ruta_modelo_svd)
+            logger.info("Modelo SVD cargado correctamente (Joblib).")
+        except Exception as e:
+            logger.error(f"No se pudo cargar el modelo SVD: {e}.")
+
+    # --- Modelo 2: KNN ---
+    if os.path.exists(ruta_modelo_knn):
+        try:
+            import joblib
+            the_app.state.modelo_knn = joblib.load(ruta_modelo_knn)
+            logger.info("Modelo KNN+Cosine cargado (Joblib).")
+        except Exception as e:
+            logger.error(f"No se pudo cargar el modelo KNN: {e}")
+
+    # --- Modelo 3: Wide & Deep (ONNX Runtime) ---
+    if os.path.exists(ruta_modelo_wnd) and os.path.exists(ruta_wnd_map):
+        try:
+            import onnxruntime as ort
+            import pickle
+            the_app.state.modelo_wnd = ort.InferenceSession(ruta_modelo_wnd)
+            with open(ruta_wnd_map, "rb") as f:
+                the_app.state.wnd_mappings = pickle.load(f)
+            logger.info("Modelo Wide&Deep ONNX cargado correctamente.")
+        except Exception as e:
+            logger.error(f"No se pudo cargar el modelo Wide&Deep: {e}")
+
+    # --- Modelo 4: Content-Based (TF-IDF) ---
+    if os.path.exists(ruta_tfidf_mat) and os.path.exists(ruta_tfidf_idx):
+        try:
+            import joblib
+            the_app.state.modelo_tfidf_mat = joblib.load(ruta_tfidf_mat)
+            the_app.state.modelo_tfidf_idx = joblib.load(ruta_tfidf_idx)
+            logger.info("Modelo TF-IDF cargado correctamente (Joblib).")
+        except Exception as e:
+            logger.error(f"No se pudo cargar el modelo TF-IDF: {e}")
+
+    # --- Modelo 5: Implicit BPR ---
+    if os.path.exists(ruta_imp) and os.path.exists(ruta_imp_dat):
+        try:
+            import pickle
+            with open(ruta_imp, "rb") as f:
+                the_app.state.modelo_imp = pickle.load(f)
+            with open(ruta_imp_dat, "rb") as f:
+                the_app.state.modelo_imp_dat = pickle.load(f)
+            logger.info("Modelo Implicit cargado correctamente.")
+        except Exception as e:
+            logger.error(f"No se pudo cargar el modelo Implicit: {e}")
+
+    # --- Modelo 6: NCF (ONNX) ---
+    if os.path.exists(ruta_modelo_ncf):
+        try:
+            import onnxruntime as ort
+            import json
+            the_app.state.modelo_ncf = ort.InferenceSession(ruta_modelo_ncf)
+            if os.path.exists(ruta_ncf_user2idx):
+                with open(ruta_ncf_user2idx, "r") as f:
+                    the_app.state.ncf_user2idx = {int(k): v for k, v in json.load(f).items()}
+            if os.path.exists(ruta_ncf_item2idx):
+                with open(ruta_ncf_item2idx, "r") as f:
+                    the_app.state.ncf_item2idx = {int(k): v for k, v in json.load(f).items()}
+            logger.info("Modelo NCF ONNX cargado correctamente.")
+        except Exception as e:
+            logger.error(f"No se pudo cargar el modelo NCF: {e}")
+
+    # --- Modelo 7: Two Towers (ONNX) ---
+    if os.path.exists(ruta_modelo_tt) and os.path.exists(ruta_tt_map):
+        try:
+            import onnxruntime as ort
+            import pickle
+            the_app.state.modelo_tt = ort.InferenceSession(ruta_modelo_tt)
+            with open(ruta_tt_map, "rb") as f:
+                the_app.state.tt_mappings = pickle.load(f)
+            logger.info("Modelo TwoTowers ONNX cargado correctamente.")
+        except Exception as e:
+            logger.error(f"No se pudo cargar el modelo TwoTowers: {e}")
+
+    # --- CARGA DE DATOS (CSV) ---
+    try:
+        if os.path.exists(ruta_ratings):
+            the_app.state.df_ratings_ia = pd.read_csv(ruta_ratings)
+            logger.info(f"Ratings cargados: {len(the_app.state.df_ratings_ia):,} filas.")
+            # Pre-calcular conteos para velocidad O(1) en mensajes de progreso
+            the_app.state.user_counts = the_app.state.df_ratings_ia.groupby("userId").size().to_dict()
+        if os.path.exists(ruta_catalogo):
+            the_app.state.df_catalogo = pd.read_csv(ruta_catalogo)
+            logger.info(f"Catálogo cargado: {len(the_app.state.df_catalogo):,} películas.")
+    except Exception as e:
+        logger.error(f"Error al cargar archivos CSV de datos: {e}")
+
+    logger.info("[STARTUP] Carga de modelos completada.")
+    yield  # La app está corriendo
+    logger.info("[SHUTDOWN] Cerrando aplicación...")
+
+
+app = FastAPI(lifespan=lifespan)
+
+# Instanciamos el logger de telemetría (se guardará en logs/recommendations.jsonl)
+# Esto nos servirá para analizar a posteriori qué se ha estado recomendando y a quién.
+telemetria = RecommendationLogger()
 
 
 @app.get("/status")
@@ -101,10 +246,7 @@ def importar_datos():
         conn.close()
 
 
-# Clase para definir qué datos esperamos en el JSON del POST
-class LoginRequest(BaseModel):
-    username: str
-    password: str
+# LoginRequest y RegisterRequest importados de src.schemas.schemas
 
 
 @app.post("/login")
@@ -149,137 +291,130 @@ def login(datos: LoginRequest):
         raise HTTPException(status_code=401, detail="Usuario o contraseña incorrectos")
 
 
-##############################################################################################
-#  Recomendación Modelos
-##############################################################################################
-
-# Ruta al modelo SVD entrenado y al CSV de ratings, para saber qué pelis ya ha visto el usuario.
-ruta_modelo_svd = "src/models/jj/modelo_1_SVD.pkl"
-ruta_ratings = "src/data/ready/ratings_finales_ia.csv"
-ruta_catalogo = "src/data/ready/dataset_final_movies.csv"
-
-# Cargamos el modelo SVD una sola vez al arrancar el Backend, no en cada petición.
-modelo_svd = None
-df_ratings_ia = None
-df_catalogo = None
-
-# --- KNN + Cosine Similarity ---
-ruta_modelo_knn = "src/models/jj/modelo_2_knn_cs.pkl"
-modelo_knn = None
-
-# --- Wide & Deep (PyTorch) ---
-ruta_modelo_wnd = "src/models/jj/modelo_3_wnd.pth"
-ruta_mapeos_wnd = "src/models/jj/wnd_mappings.pkl"
-modelo_wnd = None
-wnd_mappings = None
+@app.get("/genres")
+def obtener_generos():
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
+    cursor.execute("SELECT id, name FROM genres ORDER BY name ASC")
+    generos = cursor.fetchall()
+    cursor.close()
+    conn.close()
+    return generos
 
 
-@app.on_event("startup")
-def cargar_modelo_al_arrancar():
-    """
-    Se ejecuta automáticamente cuando FastAPI arranca.
-    Carga los 3 modelos de IA y los DataFrames necesarios en memoria.
-    """
-    global modelo_svd, df_ratings_ia, df_catalogo
-    global modelo_knn, modelo_wnd, wnd_mappings
+@app.post("/register")
+def register(datos: RegisterRequest):
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
 
-    # --- Modelo 1: SVD ---
-    if os.path.exists(ruta_modelo_svd):
-        with open(ruta_modelo_svd, "rb") as f:
-            modelo_svd = pickle.load(f)
-        print("Modelo SVD cargado correctamente.")
-    else:
-        print(f"No se encontró el modelo SVD en {ruta_modelo_svd}")
-
-    # --- Modelo 2: KNN + Cosine Similarity ---
-    if os.path.exists(ruta_modelo_knn):
-        with open(ruta_modelo_knn, "rb") as f:
-            modelo_knn = pickle.load(f)
-        print("Modelo KNN+Cosine cargado correctamente.")
-    else:
-        print(f"No se encontró el modelo KNN en {ruta_modelo_knn}")
-
-    # --- Modelo 3: Wide & Deep (PyTorch) ---
-    print(
-        f"[WnD Startup] TORCH_DISPONIBLE={TORCH_DISPONIBLE}, WideAndDeepModel={WideAndDeepModel}"
-    )
-    if TORCH_DISPONIBLE and WideAndDeepModel is not None:
-        if os.path.exists(ruta_modelo_wnd) and os.path.exists(ruta_mapeos_wnd):
-            try:
-                with open(ruta_mapeos_wnd, "rb") as f:
-                    wnd_mappings = pickle.load(f)
-                num_users = len(wnd_mappings["user2idx"])
-                num_movies = len(wnd_mappings["movie2idx"])
-                print(
-                    f"[WnD Startup] Mappings: {num_users} usuarios, {num_movies} peliculas"
-                )
-                modelo_wnd = WideAndDeepModel(
-                    num_users=num_users,
-                    num_movies=num_movies,
-                    embedding_dim=32,
-                    hidden_layers=[64, 32],
-                )
-                modelo_wnd.load_state_dict(
-                    torch.load(
-                        ruta_modelo_wnd,
-                        map_location=torch.device("cpu"),
-                        weights_only=True,
-                    )
-                )
-                modelo_wnd.eval()
-                print("Modelo Wide&Deep cargado correctamente.")
-            except Exception as e:
-                print(f"[WnD Startup] ERROR al cargar el modelo: {e}")
-                modelo_wnd = None
-        else:
-            print(
-                f"[WnD Startup] Archivos no encontrados: .pth existe={os.path.exists(ruta_modelo_wnd)}, .pkl existe={os.path.exists(ruta_mapeos_wnd)}"
-            )
-    else:
-        print(
-            f"[WnD Startup] Saltando Wide&Deep: TORCH={TORCH_DISPONIBLE}, modelo_class={WideAndDeepModel}"
+    try:
+        # 1. Verificar si el usuario o email ya existen
+        cursor.execute(
+            "SELECT id_usuario FROM users WHERE username = %s OR email = %s",
+            (datos.username, datos.email),
         )
+        if cursor.fetchone():
+            raise HTTPException(
+                status_code=400, detail="El nombre de usuario o email ya están en uso."
+            )
 
-    # --- Datos compartidos: Ratings y Catálogo ---
-    if os.path.exists(ruta_ratings):
-        df_ratings_ia = pd.read_csv(ruta_ratings)
-        print(f"Ratings cargados: {len(df_ratings_ia):,} filas.")
-    else:
-        print(f"No se encontró {ruta_ratings}")
+        # 2. Hashear la contraseña
+        password_hash = bcrypt.hashpw(
+            datos.password.encode("utf-8"), bcrypt.gensalt()
+        ).decode("utf-8")
 
-    if os.path.exists(ruta_catalogo):
-        df_catalogo = pd.read_csv(ruta_catalogo, on_bad_lines="skip", engine="python")
-        print(f"Catálogo cargado: {len(df_catalogo):,} películas.")
-    else:
-        print(f"No se encontró {ruta_catalogo}")
+        # 3. Insertar usuario
+        query_user = """
+            INSERT INTO users (username, email, passwd, fecha_nacimiento, sexo)
+            VALUES (%s, %s, %s, %s, %s)
+        """
+        cursor.execute(
+            query_user,
+            (
+                datos.username,
+                datos.email,
+                password_hash,
+                datos.fecha_nacimiento,
+                datos.sexo,
+            ),
+        )
+        id_usuario = cursor.lastrowid
+
+        # 4. Manejar intereses
+        intereses = datos.intereses
+        if not intereses:
+            # Seleccionar los 3 géneros más populares (basado en reproducciones totales)
+            query_pop = """
+                SELECT cg.genre_id
+                FROM content_genres cg
+                JOIN content_stats cs ON cg.content_id = cs.content_id
+                GROUP BY cg.genre_id
+                ORDER BY SUM(cs.reproducciones_totales) DESC
+                LIMIT 3
+            """
+            cursor.execute(query_pop)
+            res_pop = cursor.fetchall()
+            intereses = [row["genre_id"] for row in res_pop]
+
+        # Insertar intereses
+        if intereses:
+            query_int = (
+                "INSERT INTO user_interests (id_usuario, genre_id) VALUES (%s, %s)"
+            )
+            for g_id in intereses:
+                cursor.execute(query_int, (id_usuario, g_id))
+
+        conn.commit()
+        return {
+            "status": "success",
+            "message": "Usuario registrado correctamente",
+            "user_id": id_usuario,
+        }
+
+    except Exception as e:
+        conn.rollback()
+        if isinstance(e, HTTPException):
+            raise e
+        raise HTTPException(status_code=500, detail=f"Error en el servidor: {str(e)}")
+    finally:
+        cursor.close()
+        conn.close()
 
 
-@app.get("/recomendar/{user_id}")
+
+
+
+@app.get("/recomendar/svd/{user_id}", response_model=RecommendationResponse)
+@app.get("/recomendar/{user_id}", response_model=RecommendationResponse)
 def recomendar_peliculas(user_id: int, n: int = 10):
     """
     Endpoint que devuelve las top-N películas recomendadas para un usuario.
     Usa el modelo SVD entrenado para predecir ratings de películas no vistas.
     """
-    # Validamos que el modelo y los datos estén cargados
-    if modelo_svd is None:
-        raise HTTPException(
-            status_code=503, detail="El modelo SVD no está cargado. Entrénalo primero."
-        )
-    if df_ratings_ia is None:
-        raise HTTPException(
-            status_code=503, detail="Los datos de ratings no están disponibles."
-        )
+    print(f"DEBUG: Petición SVD para User {user_id}")
+
+    # --- DIAGNÓSTICO EN TIEMPO DE EJECUCIÓN ---
+    if app.state.modelo_svd is None:
+        causa = "app.state.modelo_svd es None (Error de persistencia)"
+        print(f"DEBUG ERROR: {causa}")
+        raise HTTPException(status_code=503, detail=causa)
+    if app.state.df_ratings_ia is None:
+        causa = "app.state.df_ratings_ia es None (CSV de ratings no cargado)"
+        print(f"DEBUG ERROR: {causa}")
+        raise HTTPException(status_code=503, detail=causa)
 
     # 1. Películas que este usuario YA ha visto
     pelis_vistas = set(
-        df_ratings_ia[df_ratings_ia["userId"] == user_id]["tmdb_id"].tolist()
+        app.state.df_ratings_ia[app.state.df_ratings_ia["userId"] == user_id][
+            "tmdb_id"
+        ].tolist()
     )
 
     # 2. Todas las películas disponibles en el sistema (aseguramos que parten del catálogo)
-    if df_catalogo is not None:
-        todas_las_pelis = set(df_catalogo["tmdb_id"].unique())
+    if app.state.df_catalogo is not None:
+        todas_las_pelis = set(app.state.df_catalogo["tmdb_id"].unique())
     else:
-        todas_las_pelis = set(df_ratings_ia["tmdb_id"].unique())
+        todas_las_pelis = set(app.state.df_ratings_ia["tmdb_id"].unique())
 
     # 3. Candidatas = las que NO ha visto
     pelis_no_vistas = todas_las_pelis - pelis_vistas
@@ -294,7 +429,7 @@ def recomendar_peliculas(user_id: int, n: int = 10):
     # 4. Predecimos la nota para cada película candidata
     predicciones = []
     for tmdb_id in pelis_no_vistas:
-        pred = modelo_svd.predict(user_id, tmdb_id)
+        pred = app.state.modelo_svd.predict(user_id, tmdb_id)
         predicciones.append(
             {"tmdb_id": int(tmdb_id), "predicted_rating": round(pred.est, 2)}
         )
@@ -303,10 +438,27 @@ def recomendar_peliculas(user_id: int, n: int = 10):
     predicciones.sort(key=lambda x: x["predicted_rating"], reverse=True)
     top_n = predicciones[:n]
 
-    # 6. Enriquecemos con datos del catálogo (título, poster, sinopsis, nota real)
-    if df_catalogo is not None:
-        for rec in top_n:
-            match = df_catalogo[df_catalogo["tmdb_id"] == rec["tmdb_id"]]
+    # 6. Enriquecemos con datos del catálogo
+    enriquecer_recomendaciones(top_n)
+
+    # Telemetría: Registra un evento en disco de la recomendación servida
+    telemetria.log_recommendations(str(user_id), "SVD (Surprise)", top_n)
+
+    return {"recomendaciones": top_n, "modelo": "SVD (Surprise)"}
+
+
+##############################################################################################
+#  Helper: Enriquecer recomendaciones con datos del catálogo
+##############################################################################################
+
+
+def enriquecer_recomendaciones(recomendaciones):
+    """Añade datos del catálogo (título, poster, etc.) a una lista de diccionarios con tmdb_id."""
+    if app.state.df_catalogo is not None:
+        for rec in recomendaciones:
+            match = app.state.df_catalogo[
+                app.state.df_catalogo["tmdb_id"] == rec["tmdb_id"]
+            ]
             if not match.empty:
                 fila = match.iloc[0]
                 rec["titulo"] = str(fila.get("titulo", "Sin Título"))
@@ -319,57 +471,38 @@ def recomendar_peliculas(user_id: int, n: int = 10):
                 rec["overview"] = "Sin sinopsis disponible."
                 rec["vote_average"] = 0.0
 
-    return {"recomendaciones": top_n}
-
-
-##############################################################################################
-#  Helper: Enriquecer recomendaciones con datos del catálogo
-##############################################################################################
-
-
-def enriquecer_recomendaciones(top_n):
-    """Añade título, poster, sinopsis y nota real del catálogo a cada recomendación."""
-    if df_catalogo is None:
-        return
-    for rec in top_n:
-        match = df_catalogo[df_catalogo["tmdb_id"] == rec["tmdb_id"]]
-        if not match.empty:
-            fila = match.iloc[0]
-            rec["titulo"] = str(fila.get("titulo", "Sin Título"))
-            rec["poster_path"] = str(fila.get("poster_path", ""))
-            rec["overview"] = str(fila.get("overview", "Sin sinopsis disponible."))
-            rec["vote_average"] = float(fila.get("vote_average", 0))
-        else:
-            rec["titulo"] = f"Película #{rec['tmdb_id']}"
-            rec["poster_path"] = ""
-            rec["overview"] = "Sin sinopsis disponible."
-            rec["vote_average"] = 0.0
-
 
 ##############################################################################################
 #  Recomendación Modelo KNN + Cosine Similarity
 ##############################################################################################
 
 
-@app.get("/recomendar/knn/{user_id}")
+@app.get("/recomendar/knn/{user_id}", response_model=RecommendationResponse)
 def recomendar_knn(user_id: int, n: int = 10):
     """Endpoint de recomendaciones usando KNN + Cosine Similarity (Modelo 2)."""
-    if modelo_knn is None:
-        raise HTTPException(
-            status_code=503, detail="El modelo KNN no está cargado. Entrénalo primero."
-        )
-    if df_ratings_ia is None:
-        raise HTTPException(
-            status_code=503, detail="Los datos de ratings no están disponibles."
-        )
+    print(f"DEBUG: Petición KNN para User {user_id}")
+    if app.state.modelo_knn is None:
+        causa = "app.state.modelo_knn es None"
+        print(f"DEBUG ERROR: {causa}")
+        raise HTTPException(status_code=503, detail=causa)
+    if app.state.df_ratings_ia is None:
+        causa = "app.state.df_ratings_ia es None"
+        print(f"DEBUG ERROR: {causa}")
+        raise HTTPException(status_code=503, detail=causa)
 
     pelis_vistas = set(
-        df_ratings_ia[df_ratings_ia["userId"] == user_id]["tmdb_id"].tolist()
+        app.state.df_ratings_ia[app.state.df_ratings_ia["userId"] == user_id][
+            "tmdb_id"
+        ].tolist()
     )
+    # Extraemos items del modelo y buscamos similares en base a la historia del usuario
+    # En este setup simplificado buscamos los items mas populares del dataset
+    item_counts = app.state.df_ratings_ia["tmdb_id"].value_counts()
+    # top_items ya no es necesario
     todas = (
-        set(df_catalogo["tmdb_id"].unique())
-        if df_catalogo is not None
-        else set(df_ratings_ia["tmdb_id"].unique())
+        set(app.state.df_catalogo["tmdb_id"].unique())
+        if app.state.df_catalogo is not None
+        else set(app.state.df_ratings_ia["tmdb_id"].unique())
     )
     pelis_no_vistas = todas - pelis_vistas
 
@@ -382,7 +515,7 @@ def recomendar_knn(user_id: int, n: int = 10):
 
     predicciones = []
     for tmdb_id in pelis_no_vistas:
-        pred = modelo_knn.predict(user_id, tmdb_id)
+        pred = app.state.modelo_knn.predict(user_id, tmdb_id)
         predicciones.append(
             {"tmdb_id": int(tmdb_id), "predicted_rating": round(pred.est, 2)}
         )
@@ -390,6 +523,9 @@ def recomendar_knn(user_id: int, n: int = 10):
     predicciones.sort(key=lambda x: x["predicted_rating"], reverse=True)
     top_n = predicciones[:n]
     enriquecer_recomendaciones(top_n)
+
+    # Telemetría: Registra un evento en disco de la recomendación servida
+    telemetria.log_recommendations(str(user_id), "KNN+Cosine", top_n)
 
     return {"recomendaciones": top_n, "modelo": "KNN+Cosine"}
 
@@ -399,31 +535,37 @@ def recomendar_knn(user_id: int, n: int = 10):
 ##############################################################################################
 
 
-@app.get("/recomendar/wnd/{user_id}")
+@app.get("/recomendar/wnd/{user_id}", response_model=RecommendationResponse)
 def recomendar_wnd_endpoint(user_id: int, n: int = 10):
-    """Endpoint de recomendaciones usando Wide & Deep Neural Network (Modelo 3)."""
-    if modelo_wnd is None or wnd_mappings is None:
-        raise HTTPException(
-            status_code=503, detail="El modelo Wide&Deep no está cargado."
-        )
-    if df_ratings_ia is None:
-        raise HTTPException(
-            status_code=503, detail="Los datos de ratings no están disponibles."
-        )
+    """Endpoint de recomendaciones usando Wide & Deep Neural Network (ONNX Native)."""
+    print(f"DEBUG: Petición Wide&Deep para User {user_id}")
+    if app.state.modelo_wnd is None or app.state.wnd_mappings is None:
+        causa = "app.state.modelo_wnd o mappings es None"
+        print(f"DEBUG ERROR: {causa}")
+        raise HTTPException(status_code=503, detail=causa)
+    if app.state.df_ratings_ia is None:
+        causa = "app.state.df_ratings_ia es None"
+        print(f"DEBUG ERROR: {causa}")
+        raise HTTPException(status_code=503, detail=causa)
 
-    user2idx = wnd_mappings["user2idx"]
-    movie2idx = wnd_mappings["movie2idx"]
+    user2idx = app.state.wnd_mappings["user2idx"]
+    movie2idx = app.state.wnd_mappings["movie2idx"]
 
     if user_id not in user2idx:
+        # Informar del progreso en lugar de fallback
+        count = app.state.user_counts.get(user_id, 0)
         return {
             "recomendaciones": [],
-            "modelo": "Wide&Deep",
-            "mensaje": f"El usuario {user_id} no cumplió el filtro de entrenamiento (>100 valoraciones).",
+            "modelo": "Wide&Deep (ONNX)",
+            "mensaje": f"No alcanzas las 1000 valoraciones ({count}/1000).",
+            "insufficient_data": True
         }
 
     u_idx = user2idx[user_id]
     pelis_vistas = set(
-        df_ratings_ia[df_ratings_ia["userId"] == user_id]["tmdb_id"].tolist()
+        app.state.df_ratings_ia[app.state.df_ratings_ia["userId"] == user_id][
+            "tmdb_id"
+        ].tolist()
     )
 
     candidatas = [
@@ -432,20 +574,38 @@ def recomendar_wnd_endpoint(user_id: int, n: int = 10):
     if not candidatas:
         return {
             "recomendaciones": [],
-            "modelo": "Wide&Deep",
+            "modelo": "Wide&Deep (ONNX)",
             "mensaje": "Este usuario ya ha valorado todas las películas.",
         }
 
     tmdb_ids, movie_indices = zip(*candidatas)
-    user_tensor = torch.tensor([u_idx] * len(movie_indices), dtype=torch.long)
-    movie_tensor = torch.tensor(list(movie_indices), dtype=torch.long)
 
-    with torch.no_grad():
-        preds = modelo_wnd(user_tensor, movie_tensor)
-        preds = torch.clamp(preds, 0.5, 5.0)
+    # Creamos arrays NumPy en lugar de tensores PyTorch
+    user_arr = np.array([u_idx] * len(movie_indices), dtype=np.int64)
+    movie_arr = np.array(list(movie_indices), dtype=np.int64)
 
+    # Inferencia ONNX
+    try:
+        ort_inputs = {
+            "user_ids": user_arr,
+            "item_ids": movie_arr,
+        }
+        # La salida de nuestro nuevo W&D Ranking es (Batch,) o (Batch, 1)
+        preds_raw = app.state.modelo_wnd.run(None, ort_inputs)[0].flatten()
+    except Exception as e:
+        print(f"ERROR en inferencia Wide&Deep: {e}")
+        raise HTTPException(
+            status_code=500, detail=f"Error en inferencia del modelo WnD: {e}"
+        )
+
+    # La salida de ranking (logits) la convertimos a escala visual 0.5-5.0
+    def sigmoid(x):
+        return 1 / (1 + np.exp(-np.clip(x, -20, 20)))
+
+    preds_prob = sigmoid(preds_raw)
+    
     predicciones = [
-        {"tmdb_id": int(tid), "predicted_rating": round(preds[i].item(), 2)}
+        {"tmdb_id": int(tid), "predicted_rating": round(float(preds_prob[i] * 4.5 + 0.5), 2)}
         for i, tid in enumerate(tmdb_ids)
     ]
 
@@ -453,4 +613,340 @@ def recomendar_wnd_endpoint(user_id: int, n: int = 10):
     top_n = predicciones[:n]
     enriquecer_recomendaciones(top_n)
 
-    return {"recomendaciones": top_n, "modelo": "Wide&Deep"}
+    # Telemetría: Registra un evento en disco de la recomendación servida
+    telemetria.log_recommendations(str(user_id), "Wide&Deep (ONNX)", top_n)
+
+    return {"recomendaciones": top_n, "modelo": "Wide&Deep (ONNX)"}
+
+
+##############################################################################################
+#  Recomendación Modelo 4: Content-Based / Cold Start
+##############################################################################################
+
+
+@app.get("/recomendar/content/{user_id}", response_model=RecommendationResponse)
+def recomendar_content_endpoint(user_id: int, n: int = 10):
+    """Endpoint de recomendaciones por contenido (Modelo 4)."""
+    print(f"DEBUG: Petición Content-Based para User {user_id}")
+    if app.state.modelo_tfidf_mat is None or app.state.modelo_tfidf_idx is None:
+        causa = "app.state.modelo_tfidf_mat o idx es None"
+        print(f"DEBUG ERROR: {causa}")
+        raise HTTPException(status_code=503, detail=causa)
+    if app.state.df_ratings_ia is None or app.state.df_catalogo is None:
+        causa = "app.state.df_ratings_ia o df_catalogo es None"
+        print(f"DEBUG ERROR: {causa}")
+        raise HTTPException(status_code=503, detail=causa)
+
+    user_ratings = app.state.df_ratings_ia[app.state.df_ratings_ia["userId"] == user_id]
+
+    # Cold Start (Usuario sin historial)
+    if user_ratings.empty:
+        # Recomendamos por popularidad general
+        if "vote_count" in app.state.df_catalogo.columns:
+            top_pop = (
+                app.state.df_catalogo[app.state.df_catalogo["vote_count"] > 100]
+                .sort_values(by="vote_average", ascending=False)
+                .head(n)
+            )
+        else:
+            top_pop = app.state.df_catalogo.head(n)
+
+        recomendaciones = []
+        for idx, row in top_pop.iterrows():
+            recomendaciones.append(
+                {"tmdb_id": int(row["tmdb_id"]), "predicted_rating": 4.5}
+            )
+
+        enriquecer_recomendaciones(recomendaciones)
+
+        # Telemetría: Registra evento
+        telemetria.log_recommendations(str(user_id), "TF-IDF (Cold Start Populares)", recomendaciones)
+
+        return {
+            "recomendaciones": recomendaciones,
+            "modelo": "TF-IDF (Cold Start Populares)",
+        }
+
+    # Usuario con historial -> Content-Based por similitud
+    viewed_ids = user_ratings["tmdb_id"].tolist()
+    tfidf_indices = [
+        app.state.modelo_tfidf_idx[mid]
+        for mid in viewed_ids
+        if mid in app.state.modelo_tfidf_idx
+    ]
+
+    if not tfidf_indices:
+        return {
+            "recomendaciones": [],
+            "modelo": "Content-Based",
+            "mensaje": "Película favorita no encontrada.",
+        }
+
+    # Calculamos perfil del usuario (media de los vectores de peliculas vistas)
+    user_profile = np.asarray(app.state.modelo_tfidf_mat[tfidf_indices].mean(axis=0))
+    # Similitud coseno contra todo el catálogo
+    cos_sim = cosine_similarity(user_profile, app.state.modelo_tfidf_mat).flatten()
+
+    # Obtenemos los mas similares (ignorando el mismisimo 1.0)
+    top_indices = cos_sim.argsort()[::-1][1 : n + 1]
+
+    predicciones = []
+    for idx_sim in top_indices:
+        peli = app.state.df_catalogo.iloc[idx_sim]
+        score_sim = cos_sim[idx_sim]
+        # Creamos un rating visual combinando su rating original con la similitud
+        pseudo_rating = min(5.0, 4.0 * (0.8 + 0.2 * score_sim))
+        predicciones.append(
+            {
+                "tmdb_id": int(peli["tmdb_id"]),
+                "predicted_rating": round(pseudo_rating, 2),
+            }
+        )
+
+    enriquecer_recomendaciones(predicciones)
+
+    # Telemetría: Registra evento
+    telemetria.log_recommendations(str(user_id), "Content-Based", predicciones)
+
+    return {"recomendaciones": predicciones, "modelo": "Content-Based"}
+
+
+##############################################################################################
+#  Recomendación Modelo 5: Implicit BPR
+##############################################################################################
+
+
+@app.get("/recomendar/implicit/{user_id}", response_model=RecommendationResponse)
+def recomendar_implicit_endpoint(user_id: int, n: int = 10):
+    """Endpoint de recomendaciones usando filtrado colaborativo BPR de la librería implicit."""
+    print(f"DEBUG: Petición Implicit BPR para User {user_id}")
+    if app.state.modelo_imp is None or app.state.modelo_imp_dat is None:
+        causa = f"app.state.modelo_imp es {app.state.modelo_imp is None} | app.state.modelo_imp_dat es {app.state.modelo_imp_dat is None}"
+        print(f"DEBUG ERROR: {causa}")
+        raise HTTPException(status_code=503, detail=f"Fallo en Modelos Imply: {causa}")
+    if app.state.df_ratings_ia is None:
+        causa = "app.state.df_ratings_ia es None"
+        print(f"DEBUG ERROR: {causa}")
+        raise HTTPException(status_code=503, detail=causa)
+
+    user2idx = app.state.modelo_imp_dat["user2idx"]
+    item2idx = app.state.modelo_imp_dat["item2idx"]
+    idx2item = {v: k for k, v in item2idx.items()}
+
+    if user_id not in user2idx:
+        return {
+            "recomendaciones": [],
+            "modelo": "Implicit BPR",
+            "mensaje": f"El usuario {user_id} no tiene historial en el modelo BPR.",
+        }
+
+    u_idx = user2idx[user_id]
+
+    # Extraemos arrays nativos mediante NumPy para evitar el bug Cython de implicit.recommend() en Windows!
+    u_factors = np.asarray(app.state.modelo_imp.user_factors[u_idx])
+    i_factors = np.asarray(app.state.modelo_imp.item_factors)
+
+    # Producto escalar vectorizado (Calcula score para tooooodas las peliculas del modelo a la vez)
+    scores = u_factors.dot(i_factors.T)
+
+    # Localizamos las que ya ha visto en el dataset completo
+    pelis_vistas = set(
+        app.state.df_ratings_ia[app.state.df_ratings_ia["userId"] == user_id][
+            "tmdb_id"
+        ].tolist()
+    )
+
+    # Forzamos su score a menos infinito para que nunca salgan en el top
+    for tid in pelis_vistas:
+        if tid in item2idx:
+            midx = item2idx[tid]
+            scores[midx] = -np.inf
+
+    # np.argsort()[::-1] ordena de mayor a menor y extraemos las top N posiciones de memoria
+    top_indices = np.argsort(scores)[::-1][:n]
+
+    predicciones = []
+    for idx_sim in top_indices:
+        tid = idx2item[idx_sim]
+        score_puro = float(scores[idx_sim])
+        # Al ser ranking BPR no devuelve nota 0-5. Reescalamos visualmente para UI amigable.
+        rating_ui = min(5.0, max(0.5, 3.5 + (score_puro * 0.2)))
+
+        predicciones.append(
+            {"tmdb_id": int(tid), "predicted_rating": round(rating_ui, 2)}
+        )
+
+    enriquecer_recomendaciones(predicciones)
+
+    # Telemetría: Registra evento
+    telemetria.log_recommendations(str(user_id), "Implicit BPR", predicciones)
+
+    return {"recomendaciones": predicciones, "modelo": "Implicit BPR"}
+
+
+##############################################################################################
+#  Recomendación Modelo 6: NCF (Neural Collaborative Filtering)
+##############################################################################################
+
+
+@app.get("/recomendar/ncf/{user_id}", response_model=RecommendationResponse)
+def recomendar_ncf_endpoint(user_id: int, n: int = 10):
+    """
+    Endpoint de recomendaciones usando NCF-Lite (GMF + MLP) via ONNX Runtime.
+    El modelo produce logits de relevancia para cada item; se seleccionan los Top-N
+    excluyendo items ya vistos por el usuario.
+    """
+    logger.info(f"Petición NCF para User {user_id}")
+
+    if app.state.modelo_ncf is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Modelo NCF no cargado. Ejecuta modelo_6_ncf.py para generar los artefactos."
+        )
+    if app.state.ncf_user2idx is None or app.state.ncf_item2idx is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Mapeos NCF (user2idx/item2idx) no cargados."
+        )
+
+    # Verificar que el usuario existe en el vocabulario del modelo
+    if user_id not in app.state.ncf_user2idx:
+        # Informar del progreso en lugar de fallback
+        count = app.state.user_counts.get(user_id, 0)
+        return {
+            "recomendaciones": [],
+            "modelo": "NCF",
+            "mensaje": f"No alcanzas las 1000 valoraciones ({count}/1000).",
+            "insufficient_data": True
+        }
+
+    user_idx = app.state.ncf_user2idx[user_id]
+
+    # Construir mapeos inversos
+    idx2item = {v: k for k, v in app.state.ncf_item2idx.items()}
+    n_items = len(app.state.ncf_item2idx)
+
+    # Puntuar TODOS los items de una sola vez (batch inference via ONNX)
+    try:
+        user_ids_np = np.full(n_items, user_idx, dtype=np.int64)
+        item_ids_np = np.array(list(app.state.ncf_item2idx.values()), dtype=np.int64)
+
+        # La salida de ONNX suele ser (N, 1). La aplanamos a (N,)
+        scores = app.state.modelo_ncf.run(
+            None,
+            {"user_ids": user_ids_np, "item_ids": item_ids_np}
+        )[0].flatten()
+
+        # Excluir items ya vistos
+        if app.state.df_ratings_ia is not None:
+            user_ratings = app.state.df_ratings_ia[app.state.df_ratings_ia["userId"] == user_id]
+            pelis_vistas = set(user_ratings["tmdb_id"].unique())
+            for tid in pelis_vistas:
+                if tid in app.state.ncf_item2idx:
+                    midx = app.state.ncf_item2idx[tid]
+                    # midx es el valor (v) de item2idx
+                    # Queremos poner el score de esa peli a -inf
+                    # Pero OJO: 'scores' está indexado por el orden de 'item_ids_np'
+                    # Como item_ids_np es np.array(list(item2idx.values())), el índice 
+                    # de un midx está en su propia posición si values() es secuencial.
+                    # Para ser 100% seguros, usamos el mapeo directo
+                    scores[midx] = -np.inf
+
+        # Seleccionar Top-N
+        top_indices = np.argsort(scores)[::-1][:n]
+
+        idx2item = {v: k for k, v in app.state.ncf_item2idx.items()}
+        predicciones = []
+        for idx_item in top_indices:
+            if scores[idx_item] == -np.inf:
+                continue
+            tid = idx2item[idx_item]
+            score_puro = float(scores[idx_item])
+            # Transformar logit a rating visual amigable (3.0 - 5.0 rango)
+            rating_ui = min(5.0, max(0.5, 3.5 + (score_puro * 0.3)))
+            predicciones.append(
+                {"tmdb_id": int(tid), "predicted_rating": round(rating_ui, 2)}
+            )
+
+        enriquecer_recomendaciones(predicciones)
+
+        # Telemetría: Registra evento
+        telemetria.log_recommendations(str(user_id), "NCF-Lite", predicciones)
+
+        return {"recomendaciones": predicciones, "modelo": "NCF-Lite"}
+
+    except Exception as e:
+        logger.error(f"Error en recomendación NCF para User {user_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+##############################################################################################
+#  Recomendación Modelo 7: Two Towers (Bi-Encoder)
+##############################################################################################
+
+
+@app.get("/recomendar/twotowers/{user_id}", response_model=RecommendationResponse)
+def recomendar_tt_endpoint(user_id: int, n: int = 10):
+    """Endpoint de recomendaciones usando Two Towers Neural Network (ONNX)."""
+    logger.info(f"Petición TwoTowers para User {user_id}")
+    
+    if app.state.modelo_tt is None or app.state.tt_mappings is None:
+        raise HTTPException(status_code=503, detail="Modelo TwoTowers no cargado.")
+        
+    user2idx = app.state.tt_mappings["user2idx"]
+    item2idx = app.state.tt_mappings["item2idx"]
+    idx2item = {v: k for k, v in item2idx.items()}
+
+    if user_id not in user2idx:
+        # Informar del progreso en lugar de fallback
+        count = app.state.user_counts.get(user_id, 0)
+        return {
+            "recomendaciones": [],
+            "modelo": "Two-Towers",
+            "mensaje": f"No alcanzas las 1000 valoraciones ({count}/1000).",
+            "insufficient_data": True
+        }
+
+    u_idx = user2idx[user_id]
+    
+    # Puntuar items (Batch inference)
+    # Para velocidad en demo local puntuamos solo items que conoce el modelo
+    tids_candidatos = list(item2idx.keys())
+    i_indices = list(item2idx.values())
+    
+    user_arr = np.full(len(i_indices), u_idx, dtype=np.int64)
+    item_arr = np.array(i_indices, dtype=np.int64)
+    
+    try:
+        ort_inputs = {"user_ids": user_arr, "item_ids": item_arr}
+        # El modelo TT devuelve similitud (producto escalar)
+        scores = app.state.modelo_tt.run(None, ort_inputs)[0].flatten()
+    except Exception as e:
+        logger.error(f"Error TwoTowers inference: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+    # Filtrar ya vistas
+    if app.state.df_ratings_ia is not None:
+        vistas = set(app.state.df_ratings_ia[app.state.df_ratings_ia["userId"] == user_id]["tmdb_id"])
+        for idx, tid in enumerate(tids_candidatos):
+            if tid in vistas:
+                scores[idx] = -np.inf
+
+    top_indices = np.argsort(scores)[::-1][:n]
+    
+    predicciones = []
+    for idx in top_indices:
+        if scores[idx] == -np.inf: continue
+        tid = idx2item[item_arr[idx]]
+        # Escalar similitud arbitraria a 0.5-5.0 para UI
+        s = float(scores[idx])
+        rating_ui = min(5.0, max(0.5, 3.5 + (s * 0.1)))
+        predicciones.append({"tmdb_id": int(tid), "predicted_rating": round(rating_ui, 2)})
+
+    enriquecer_recomendaciones(predicciones)
+
+    # Telemetría: Registra evento
+    telemetria.log_recommendations(str(user_id), "Two-Towers", predicciones)
+
+    return {"recomendaciones": predicciones, "modelo": "Two-Towers"}
+

@@ -59,10 +59,14 @@ def analizar_ratings():
         
     total_ratings = len(df)
     usuarios_unicos = df['userId'].nunique()
+    user_id_min = df['userId'].min()
+    user_id_max = df['userId'].max()
     peliculas_unicas = df['tmdb_id'].nunique()
     
     print(f"Total de valoraciones: {total_ratings}")
     print(f"Usuarios unicos: {usuarios_unicos}")
+    print(f"ID de usuario minimo: {user_id_min}")
+    print(f"ID de usuario maximo: {user_id_max}")
     print(f"Peliculas valoradas: {peliculas_unicas}")
     
     # Calcular la densidad de la matriz (Dato clave para Machine Learning)
@@ -75,6 +79,6 @@ def analizar_ratings():
     print(f"  -> Sparsity (Vacio a predecir): {(100-densidad):.2f}%")
 
 if __name__ == "__main__":
-    analizar_catalogo("shows")
-    analizar_catalogo("movies")
+    #analizar_catalogo("shows")
+    #analizar_catalogo("movies")
     analizar_ratings()

@@ -63,11 +63,12 @@ BATCH_SIZE = (
 EPOCHS = 10
 LEARNING_RATE = 0.001
 
-# Hacemos recomendaciones al 100% de tus usuarios.
-# Hacemos recomendaciones al 100% de tus usuarios.
-MIN_RATINGS_USUARIO = 1000
-# Con 1000 valoraciones por peli sincronizamos con el evaluador
-MIN_RATINGS_PELICULA = 1000
+# Umbrales de filtrado para el entrenamiento.
+# IMPORTANTE: El modelo original se entrenó con 1000/1000, lo que excluía al ~97.5% de usuarios.
+# Se ha rebajado a 100/50 para aumentar cobertura. Si quieres reentrenar con otros valores,
+# cambia aquí y el modelo se guardará con sufijo automático (ej: modelo_3_wnd_r100.pth)
+MIN_RATINGS_USUARIO = 100    # Antes: 1000 → Solo 2.5% de users. Ahora: 100 → ~40% de users
+MIN_RATINGS_PELICULA = 50    # Antes: 1000 → Pocas pelis. Ahora: 50 → Catálogo amplio
 
 # Relación de muestreo negativo (cuántos "no-vistos" por cada "visto")
 NEG_SAMPLES_PER_POS = 4
@@ -266,11 +267,23 @@ def entrenar_modelo(df_train, df_test, num_users, num_movies, all_movie_indices)
     acc = hits / len(test_dataset)
     print(f"\n  Ranking Accuracy en Test: {acc * 100:.2f}%")
 
-    # Guardado .pth
-    torch.save(model.state_dict(), ruta_modelo)
+    # Guardado de artefactos con sufijo del umbral para no pisar modelos anteriores.
+    # Ejemplo: si MIN_RATINGS_USUARIO=100, el archivo será modelo_3_wnd_r100.pth
+    sufijo = f"_r{MIN_RATINGS_USUARIO}" if MIN_RATINGS_USUARIO != 1000 else ""
+    ruta_modelo_final = ruta_modelo.replace(".pth", f"{sufijo}.pth")
+    ruta_mapeos_final = ruta_mapeos.replace(".pkl", f"{sufijo}.pkl")
+
+    torch.save(model.state_dict(), ruta_modelo_final)
+    print(f"  Modelo guardado en: {ruta_modelo_final}")
+
+    # Guardar mappings (con sufijo)
+    with open(ruta_mapeos_final, "wb") as f:
+        pickle.dump({"user2idx": user2idx, "movie2idx": movie2idx}, f)
 
     # EXPORTACIÓN A ONNX (Crucial para la API)
-    ruta_onnx = ruta_modelo.replace(".pth", ".onnx")
+    ruta_onnx = ruta_modelo_final.replace(".pth", ".onnx")
+    # Si el ONNX va a exports/, ajustamos la ruta
+    ruta_onnx = ruta_onnx.replace("checkpoints", "exports")
     print(f"\n  Exportando a ONNX en {ruta_onnx}...")
     model.cpu()
     dummy_u = torch.zeros(1, dtype=torch.long)
@@ -285,8 +298,14 @@ def entrenar_modelo(df_train, df_test, num_users, num_movies, all_movie_indices)
     )
 
     registrar_metricas(
-        modelo="Wide&Deep-Ranking",
-        hiperparams={"epochs": EPOCHS, "neg_ratio": NEG_SAMPLES_PER_POS, "emb_dim": 64},
+        modelo=f"Wide&Deep-Ranking{sufijo}",
+        hiperparams={
+            "epochs": EPOCHS,
+            "neg_ratio": NEG_SAMPLES_PER_POS,
+            "emb_dim": 64,
+            "min_ratings_user": MIN_RATINGS_USUARIO,
+            "min_ratings_item": MIN_RATINGS_PELICULA,
+        },
         metricas={"Accuracy": acc},
         dataset_size=len(train_dataset),
     )

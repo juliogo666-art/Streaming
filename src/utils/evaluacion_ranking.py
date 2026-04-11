@@ -304,6 +304,73 @@ def predecir_implicit(modelo, datos, user_id, candidatas):
     return [pelicula[0] for pelicula in predicciones[:K]]
 
 
+# ======================================================================================
+# Predicción para el modelo TX — SVD+KNN+Rerank con géneros
+# ======================================================================================
+
+# Variable global para reutilizar el recommender de tx/ sin reconstruirlo por cada usuario
+_tx_recommender_cache = None
+
+
+def _obtener_tx_recommender():
+    """
+    Construye (o devuelve del caché) el recommender de tx/.
+    Se construye una sola vez y se reutiliza para todos los usuarios evaluados.
+    """
+    global _tx_recommender_cache
+    if _tx_recommender_cache is not None:
+        return _tx_recommender_cache
+
+    try:
+        from src.models.tx.model_SVD_KNN_RERANK_con_generos import build_recommender
+        print("  Construyendo recommender tx/SVD+KNN+Rerank (con géneros)...")
+        _tx_recommender_cache = build_recommender(
+            force_reprocess=False,
+            force_svd_train=False,
+            force_knn_train=False,
+            force_catalog_features_rebuild=False,
+            min_ratings=30,
+            latent_dim=50,
+            knn_neighbors_fit=80,
+        )
+        print("  Recommender tx/ construido correctamente.")
+        return _tx_recommender_cache
+    except Exception as e:
+        print(f"  [ERROR] No se pudo construir el recommender tx/: {e}")
+        return None
+
+
+def predecir_tx_rerank(id_usuario, candidatas):
+    """
+    Genera predicciones Top-K usando el modelo tx/SVD+KNN+Rerank con géneros.
+    A diferencia de los modelos de jj/ (que predicen peli a peli), el de tx/
+    genera un ranking completo internamente, así que solo filtramos por candidatas.
+    """
+    recommender = _obtener_tx_recommender()
+    if recommender is None:
+        return []
+
+    try:
+        # El recommender devuelve [{"tmdb_id": ..., "titulo": ..., "score": ...}]
+        recomendaciones = recommender.recommend(
+            raw_user_id=id_usuario,
+            top_n=K,
+            n_neighbors=50,
+            n_candidates=500,
+            rerank_alpha=0.7,
+            genre_weight=0.7,
+        )
+        # Filtramos para quedarnos solo con las que están en las candidatas
+        ids_candidatas = set(candidatas)
+        resultados_filtrados = [
+            int(r["tmdb_id"]) for r in recomendaciones
+            if int(r["tmdb_id"]) in ids_candidatas
+        ]
+        return resultados_filtrados[:K]
+    except Exception:
+        return []
+
+
 # ---- EVALUACIÓN ----
 
 
@@ -370,9 +437,10 @@ def evaluar():
     lista_respuestas_examen = []
 
     # Aquí guardaremos lo que responde la IA en el examen. Un diccionario por cada inteligencia.
+    # Incluimos TX_RERANK para evaluar el modelo híbrido de tx/ junto a los demás
     respuestas_de_la_ia = {
         m: {}
-        for m in ["SVD", "KNN", "WND_ONNX", "TFIDF_MAT", "IMP", "NCF_ONNX", "TT_ONNX"]
+        for m in ["SVD", "KNN", "WND_ONNX", "TFIDF_MAT", "IMP", "NCF_ONNX", "TT_ONNX", "TX_RERANK"]
     }
 
     print(
@@ -475,6 +543,11 @@ def evaluar():
                     peliculas_candidatas_para_recomendar,
                 )
 
+            # D) Modelo TX: SVD+KNN+Rerank con géneros (siempre disponible, no depende de .pkl)
+            recomendaciones_tx = predecir_tx_rerank(id_usuario, peliculas_candidatas_para_recomendar)
+            if recomendaciones_tx:
+                respuestas_de_la_ia["TX_RERANK"][id_usuario] = recomendaciones_tx
+
         except Exception as error_escondido:
             # Si falla un usuario, pasamos silenciosamente al siguiente
             continue
@@ -496,6 +569,7 @@ def evaluar():
         "IMP": "Filtrado Implícito (BPR)",
         "NCF_ONNX": "Red Neuronal NCF-Lite",
         "TT_ONNX": "Two-Towers Bi-Encoder",
+        "TX_RERANK": "SVD+KNN Híbrido con Géneros (TX)",
     }
 
     # Le damos a revisar al Tribunal modelo por modelo

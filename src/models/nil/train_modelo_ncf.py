@@ -36,6 +36,9 @@ from typing import Dict, List, Tuple
 import numpy as np
 import pandas as pd
 import torch
+
+# Tracking centralizado de métricas (historial_metricas.csv)
+from src.utils.registrar_metricas import registrar_metricas
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader, Dataset
@@ -619,6 +622,25 @@ def main() -> None:
         args.onnx_path,
         args.user2idx_path,
         args.item2idx_path,
+    )
+
+    # ------------------------------------------------------------------
+    # 6. Registro centralizado de métricas en historial_metricas.csv
+    # ------------------------------------------------------------------
+    registrar_metricas(
+        modelo="NCF-Lite (nil)",
+        hiperparams={
+            "emb_dim": args.emb_dim,
+            "batch_size": args.batch_size,
+            "epochs": args.epochs,
+            "lr": args.lr,
+            "min_user_ratings": args.min_user_ratings,
+            "min_item_ratings": args.min_item_ratings,
+        },
+        metricas={},  # Las métricas de ranking se calculan aparte en evaluación
+        dataset_size=len(train_loader.dataset),
+        train_time_s=round(t_total, 1),
+        notas="Entrenamiento NCF-Lite (pipeline nil)",
     )
 
 

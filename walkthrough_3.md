@@ -278,14 +278,34 @@ Si el proyecto escala a producción real (servidor dedicado, reentrenamiento aut
 
 ## 7. Resumen de Acciones Pendientes
 
-| # | Acción | Prioridad | Esfuerzo |
-|---|--------|-----------|----------|
-| 1 | Decidir modelos definitivos por cluster | 🔴 ALTA | Bajo (este documento propone la decisión) |
-| 2 | Ampliar `evaluation_pipeline.py` con `register_results_to_csv()` | 🔴 ALTA | 30 min |
-| 3 | Añadir métrica MRR@K en `src/metrics/` | 🟡 MEDIA | 20 min |
-| 4 | Integrar modelos tx/ en `evaluacion_ranking.py` | 🔴 ALTA | 1 hora |
-| 5 | Reentrenar W&D y Two-Towers con umbrales bajos (100/50) | 🟡 MEDIA | 2-8 horas (GPU) |
-| 6 | Reentrenar NCF con umbrales 50/50 | 🟡 MEDIA | 1-3 horas |
-| 7 | Añadir `registrar_metricas()` a modelos nil/ y tx/ | 🟢 BAJA | 15 min |
-| 8 | Ejecutar evaluación comparativa final por clusters | 🔴 ALTA | 2-4 horas |
-| 9 | Limpiar modelos duplicados (dejar uno por concepto) | 🟢 BAJA | 30 min |
+| # | Acción | Prioridad | Estado |
+|---|--------|-----------|--------|
+| 1 | Decidir modelos definitivos por cluster | 🔴 ALTA | ✅ Decidido |
+| 2 | Ampliar `evaluation_pipeline.py` con `register_results_to_csv()` | 🔴 ALTA | ✅ Implementado |
+| 3 | Añadir métrica MRR@K en `src/metrics/` | 🟡 MEDIA | ✅ Creado `src/metrics/mrr.py` |
+| 4 | Integrar modelos tx/ en `evaluacion_ranking.py` | 🔴 ALTA | ✅ `predecir_tx_rerank()` + TX_RERANK |
+| 5 | Reentrenar W&D y Two-Towers con umbrales bajos (100/50) | 🟡 MEDIA | ⏳ Código preparado, falta ejecutar (GPU) |
+| 6 | Reentrenar NCF con umbrales 50/50 | 🟡 MEDIA | ⏳ Pendiente (GPU) |
+| 7 | Añadir `registrar_metricas()` a modelos nil/ y tx/ | 🟢 BAJA | ✅ 4 archivos actualizados |
+| 8 | Ejecutar evaluación comparativa final por clusters | 🔴 ALTA | ⏳ Pendiente |
+| 9 | Limpiar modelos duplicados (dejar uno por concepto) | 🟢 BAJA | ❌ Descartado (el usuario prefiere conservar todos) |
+
+### Cambios realizados en código (resumen ejecutivo):
+
+**Archivos nuevos:**
+- `src/metrics/mrr.py` — Métrica MRR@K
+
+**Archivos modificados (rutas a `artifacts/`):**
+- `src/api/main_api.py`, `src/utils/evaluacion_ranking.py`, `src/utils/exportar_onnx.py`
+- 7 modelos de `jj/`, 1 de `nil/`
+
+**Archivos modificados (tracking `registrar_metricas()`):**
+- `nil/train_modelo_ncf.py`, `nil/evaluar_modelo_final.py`
+- `tx/model_SVD_KNN_RERANK.py`, `tx/model_SVD_KNN_RERANK_con_generos.py`
+
+**Archivos modificados (evaluación + reentrenamiento):**
+- `src/utils/evaluacion_ranking.py` — TX integrado + MRR@K + registro CSV automático
+- `src/pipelines/evaluation_pipeline.py` — `registrar_resultados_en_csv()`
+- `modelo_3_wide&deep.py` — MIN_RATINGS: 1000→100/50, sufijo automático
+- `modelo_7_twotowers.py` — MIN_RATINGS: 1000→100/50, sufijo automático
+

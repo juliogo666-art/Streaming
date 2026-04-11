@@ -12,6 +12,9 @@ from sklearn.neighbors import NearestNeighbors
 from sklearn.preprocessing import LabelEncoder
 from sklearn.model_selection import train_test_split
 
+# Tracking centralizado de métricas (historial_metricas.csv)
+from src.utils.registrar_metricas import registrar_metricas
+
 
 DATA_READY_RATINGS = "src/data/ready/ratings_finales_ia.csv"
 DATA_READY_CATALOG_MOVIES = "src/data/ready/dataset_final_movies.csv"
@@ -682,4 +685,24 @@ if __name__ == "__main__":
         verbose=True,
     )
     print("Métricas (muestra):", metrics)
+
+    # Registro centralizado en historial_metricas.csv
+    registrar_metricas(
+        modelo="SVD+KNN+Rerank Géneros (TX)",
+        hiperparams={
+            "min_ratings": 30,
+            "latent_dim": 50,
+            "knn_neighbors_fit": 80,
+            "rerank_alpha": 0.7,
+            "genre_weight": 0.7,
+        },
+        metricas={
+            "RMSE": metrics.get("RMSE", 0.0),
+            "MAE": metrics.get("MAE", 0.0),
+            "Precision_10": metrics.get("Precision@10", 0.0),
+            "NDCG_10": metrics.get("NDCG@10", 0.0),
+        },
+        dataset_size=len(recommender.df_prep),
+        notas="Evaluación muestreo 500 usuarios, test_size=0.2",
+    )
 

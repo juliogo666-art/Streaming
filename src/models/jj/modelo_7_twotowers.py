@@ -26,8 +26,10 @@ EPOCHS = 5
 LEARNING_RATE = 0.001
 EMBEDDING_DIM = 64
 
-MIN_RATINGS_USUARIO = 1000
-MIN_RATINGS_PELICULA = 1000
+# Umbrales de filtrado. Originalmente 1000/1000, rebajados para aumentar cobertura.
+# Si quieres reentrenar con otros valores, cambia aquí. El sufijo se añade automáticamente.
+MIN_RATINGS_USUARIO = 100    # Antes: 1000 → Solo 2.5% de users
+MIN_RATINGS_PELICULA = 50    # Antes: 1000 → Pocas pelis
 
 
 # -----------------------------------------------------------------------------------------
@@ -125,16 +127,29 @@ def train():
         print(f"  Época {epoch+1:02d}/{EPOCHS} | Loss: {total_loss/len(train_loader):.4f}")
         
     print("\n  Entrenamiento completado.")
-    torch.save(model.state_dict(), ruta_modelo)
-    
+
+    # Guardado de artefactos con sufijo del umbral para no pisar modelos anteriores.
+    # Ejemplo: si MIN_RATINGS_USUARIO=100, genera modelo_7_twotowers_r100.pth
+    sufijo = f"_r{MIN_RATINGS_USUARIO}" if MIN_RATINGS_USUARIO != 1000 else ""
+    ruta_modelo_final = ruta_modelo.replace(".pth", f"{sufijo}.pth")
+    ruta_mapeos_final = ruta_mapeos.replace(".pkl", f"{sufijo}.pkl")
+
+    torch.save(model.state_dict(), ruta_modelo_final)
+    print(f"  Modelo guardado en: {ruta_modelo_final}")
+
+    # Guardar mappings (con sufijo)
+    with open(ruta_mapeos_final, "wb") as f:
+        pickle.dump({"user2idx": user2idx, "item2idx": item2idx}, f)
+
     # Exportar a ONNX
-    ruta_onnx = ruta_modelo.replace(".pth", ".onnx")
+    ruta_onnx = ruta_modelo_final.replace(".pth", ".onnx")
+    ruta_onnx = ruta_onnx.replace("checkpoints", "exports")
     print(f"  Exportando a ONNX: {ruta_onnx}")
     model.cpu().eval()
-    
+
     dummy_u = torch.zeros(1, dtype=torch.long)
     dummy_i = torch.zeros(1, dtype=torch.long)
-    
+
     torch.onnx.export(
         model,
         (dummy_u, dummy_i),
@@ -143,10 +158,15 @@ def train():
         output_names=["similarity"],
         dynamic_axes={"user_ids": {0: "batch_size"}, "item_ids": {0: "batch_size"}}
     )
-    
+
     registrar_metricas(
-        modelo="TwoTowers",
-        hiperparams={"batch": BATCH_SIZE, "emb": EMBEDDING_DIM},
+        modelo=f"TwoTowers{sufijo}",
+        hiperparams={
+            "batch": BATCH_SIZE,
+            "emb": EMBEDDING_DIM,
+            "min_ratings_user": MIN_RATINGS_USUARIO,
+            "min_ratings_item": MIN_RATINGS_PELICULA,
+        },
         metricas={"Loss": total_loss/len(train_loader)},
         dataset_size=len(df_train)
     )

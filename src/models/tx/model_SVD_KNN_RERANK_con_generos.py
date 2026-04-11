@@ -12,6 +12,9 @@ from sklearn.neighbors import NearestNeighbors
 from sklearn.preprocessing import LabelEncoder
 from sklearn.model_selection import train_test_split
 
+import sys
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..")))
+
 # Tracking centralizado de métricas (historial_metricas.csv)
 from src.utils.registrar_metricas import registrar_metricas
 

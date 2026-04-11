@@ -24,14 +24,14 @@ RUTA_TFIDF_IDX = "artifacts/weights/modelo_4_indices.pkl"
 RUTA_IMP_MOD = "artifacts/weights/modelo_5_implicit.pkl"
 RUTA_IMP_DAT = "artifacts/weights/modelo_5_implicit_dataset.pkl"
 # Modelos exportados a ONNX (guardados en artifacts/exports/)
-RUTA_WND_ONNX = "artifacts/exports/modelo_3_wnd.onnx"
+RUTA_WND_ONNX = "artifacts/exports/modelo_3_wnd_r100.onnx"
 RUTA_NCF_ONNX = "artifacts/exports/modelo_6_ncf.onnx"
-RUTA_TT_ONNX = "artifacts/exports/modelo_7_twotowers.onnx"
+RUTA_TT_ONNX = "artifacts/exports/modelo_7_twotowers_r100.onnx"
 # Mapeos de IDs internos <-> reales (guardados en artifacts/mappings/)
-RUTA_WND_MAP = "artifacts/mappings/wnd_mappings.pkl"
+RUTA_WND_MAP = "artifacts/mappings/wnd_mappings_r100.pkl"
 RUTA_NCF_USER2IDX = "artifacts/mappings/ncf_user2idx.json"
 RUTA_NCF_ITEM2IDX = "artifacts/mappings/ncf_item2idx.json"
-RUTA_TT_MAP = "artifacts/mappings/twotowers_mappings.pkl"
+RUTA_TT_MAP = "artifacts/mappings/twotowers_mappings_r100.pkl"
 
 # Guardar Resultados
 RUTA_RESULTADOS = "src/utils/metricas_ranking.csv"

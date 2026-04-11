@@ -52,23 +52,22 @@ from src.utils.registrar_metricas import registrar_metricas
 # -----------------------------------------------------------------------------------------
 # CONFIGURACIÓN GLOBAL
 # -----------------------------------------------------------------------------------------
-ruta_ratings = "src/data/ready/ratings_finales_ia.csv"
-ruta_modelo = "artifacts/checkpoints/modelo_3_wnd.pth"  # Checkpoint PyTorch
-ruta_mapeos = "artifacts/mappings/wnd_mappings.pkl"  # Mapeo de IDs reales <-> internos
-
-# Parámetros del Deep Learning (Hiperparámetros)
-BATCH_SIZE = (
-    4096  # Cuántas valoraciones procesamos de golpe. Las GPU aman los lotes grandes.
-)
-EPOCHS = 10
-LEARNING_RATE = 0.001
-
 # Umbrales de filtrado para el entrenamiento.
 # IMPORTANTE: El modelo original se entrenó con 1000/1000, lo que excluía al ~97.5% de usuarios.
 # Se ha rebajado a 100/50 para aumentar cobertura. Si quieres reentrenar con otros valores,
 # cambia aquí y el modelo se guardará con sufijo automático (ej: modelo_3_wnd_r100.pth)
 MIN_RATINGS_USUARIO = 100    # Antes: 1000 → Solo 2.5% de users. Ahora: 100 → ~40% de users
 MIN_RATINGS_PELICULA = 50    # Antes: 1000 → Pocas pelis. Ahora: 50 → Catálogo amplio
+
+sufijo = f"_r{MIN_RATINGS_USUARIO}" if MIN_RATINGS_USUARIO != 1000 else ""
+ruta_ratings = "src/data/ready/ratings_finales_ia.csv"
+ruta_modelo = f"artifacts/checkpoints/modelo_3_wnd{sufijo}.pth"
+ruta_mapeos = f"artifacts/mappings/wnd_mappings{sufijo}.pkl"
+
+# Parámetros del Deep Learning (Hiperparámetros)
+BATCH_SIZE = 65536  # ¡VITAL! Con 74 millones de datos, un batch de 4096 hace 18.000 iteraciones/época (cuello de botella de CPU-GPU). 65536 vuela.
+EPOCHS = 10
+LEARNING_RATE = 0.001
 
 # Relación de muestreo negativo (cuántos "no-vistos" por cada "visto")
 NEG_SAMPLES_PER_POS = 4
@@ -217,8 +216,13 @@ def entrenar_modelo(df_train, df_test, num_users, num_movies, all_movie_indices)
         1,  # Menos negativos en test para velocidad
     )
 
-    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
-    test_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False)
+    # Generador ultrarrápido para saltarnos el cuello de botella de DataLoader en PyTorch
+    def fast_batch_generator(dataset, batch_size):
+        num_samples = len(dataset)
+        indices = torch.randperm(num_samples)
+        for start_idx in range(0, num_samples, batch_size):
+            batch_idx = indices[start_idx : start_idx + batch_size]
+            yield dataset.users[batch_idx], dataset.movies[batch_idx], dataset.labels[batch_idx]
 
     # Usamos Binary Cross Entropy with Logits (ideal para Ranking 0/1)
     criterio = nn.BCEWithLogitsLoss()
@@ -229,10 +233,11 @@ def entrenar_modelo(df_train, df_test, num_users, num_movies, all_movie_indices)
         total_loss = 0
         inicio_epoca = time.time()
 
-        for i, (users, movies, labels) in enumerate(train_loader):
-            users = users.to(device)
-            movies = movies.to(device)
-            labels = labels.to(device)
+        # Bucle de entrenamiento por lotes
+        for users, movies, labels in fast_batch_generator(train_dataset, BATCH_SIZE):
+            users = users.to(device, non_blocking=True)
+            movies = movies.to(device, non_blocking=True)
+            labels = labels.to(device, non_blocking=True)
 
             # Forward
             logits = model(users, movies)
@@ -254,12 +259,10 @@ def entrenar_modelo(df_train, df_test, num_users, num_movies, all_movie_indices)
     model.eval()
     hits = 0
     with torch.no_grad():
-        for users, movies, labels in test_loader:
-            users, movies, labels = (
-                users.to(device),
-                movies.to(device),
-                labels.to(device),
-            )
+        for users, movies, labels in fast_batch_generator(test_dataset, BATCH_SIZE):
+            users = users.to(device, non_blocking=True)
+            movies = movies.to(device, non_blocking=True)
+            labels = labels.to(device, non_blocking=True)
             logits = model(users, movies)
             preds = (torch.sigmoid(logits) > 0.5).float()
             hits += (preds == labels).sum().item()
@@ -267,23 +270,12 @@ def entrenar_modelo(df_train, df_test, num_users, num_movies, all_movie_indices)
     acc = hits / len(test_dataset)
     print(f"\n  Ranking Accuracy en Test: {acc * 100:.2f}%")
 
-    # Guardado de artefactos con sufijo del umbral para no pisar modelos anteriores.
-    # Ejemplo: si MIN_RATINGS_USUARIO=100, el archivo será modelo_3_wnd_r100.pth
-    sufijo = f"_r{MIN_RATINGS_USUARIO}" if MIN_RATINGS_USUARIO != 1000 else ""
-    ruta_modelo_final = ruta_modelo.replace(".pth", f"{sufijo}.pth")
-    ruta_mapeos_final = ruta_mapeos.replace(".pkl", f"{sufijo}.pkl")
-
-    torch.save(model.state_dict(), ruta_modelo_final)
-    print(f"  Modelo guardado en: {ruta_modelo_final}")
-
-    # Guardar mappings (con sufijo)
-    with open(ruta_mapeos_final, "wb") as f:
-        pickle.dump({"user2idx": user2idx, "movie2idx": movie2idx}, f)
+    # Guardado .pth global (ya incluye el sufijo r100 en la ruta global)
+    torch.save(model.state_dict(), ruta_modelo)
+    print(f"  Modelo guardado en: {ruta_modelo}")
 
     # EXPORTACIÓN A ONNX (Crucial para la API)
-    ruta_onnx = ruta_modelo_final.replace(".pth", ".onnx")
-    # Si el ONNX va a exports/, ajustamos la ruta
-    ruta_onnx = ruta_onnx.replace("checkpoints", "exports")
+    ruta_onnx = ruta_modelo.replace(".pth", ".onnx").replace("checkpoints", "exports")
     print(f"\n  Exportando a ONNX en {ruta_onnx}...")
     model.cpu()
     dummy_u = torch.zeros(1, dtype=torch.long)

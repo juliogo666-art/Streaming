@@ -17,19 +17,20 @@ from src.utils.registrar_metricas import registrar_metricas
 # -----------------------------------------------------------------------------------------
 # CONFIGURACIÓN
 # -----------------------------------------------------------------------------------------
-ruta_ratings = "src/data/ready/ratings_finales_ia.csv"
-ruta_modelo = "artifacts/checkpoints/modelo_7_twotowers.pth"
-ruta_mapeos = "artifacts/mappings/twotowers_mappings.pkl"
-
-BATCH_SIZE = 2048
-EPOCHS = 5
-LEARNING_RATE = 0.001
-EMBEDDING_DIM = 64
-
 # Umbrales de filtrado. Originalmente 1000/1000, rebajados para aumentar cobertura.
 # Si quieres reentrenar con otros valores, cambia aquí. El sufijo se añade automáticamente.
 MIN_RATINGS_USUARIO = 100    # Antes: 1000 → Solo 2.5% de users
 MIN_RATINGS_PELICULA = 50    # Antes: 1000 → Pocas pelis
+
+sufijo = f"_r{MIN_RATINGS_USUARIO}" if MIN_RATINGS_USUARIO != 1000 else ""
+ruta_ratings = "src/data/ready/ratings_finales_ia.csv"
+ruta_modelo = f"artifacts/checkpoints/modelo_7_twotowers{sufijo}.pth"
+ruta_mapeos = f"artifacts/mappings/twotowers_mappings{sufijo}.pkl"
+
+BATCH_SIZE = 8192  # Aumentado (antes 2048) para mayor velocidad con el nuevo dataset gigante
+EPOCHS = 5
+LEARNING_RATE = 0.001
+EMBEDDING_DIM = 64
 
 
 # -----------------------------------------------------------------------------------------
@@ -93,16 +94,24 @@ def train():
     
     # DataLoader
     train_ds = InteractionDataset(df_train["u_idx"].values, df_train["i_idx"].values)
-    train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True)
     
+    def fast_batch_generator(dataset, batch_size):
+        num_samples = len(dataset)
+        indices = torch.randperm(num_samples)
+        for start_idx in range(0, num_samples, batch_size):
+            batch_idx = indices[start_idx : start_idx + batch_size]
+            yield dataset.users[batch_idx], dataset.items[batch_idx]
+            
     print("\n  Iniciando entrenamiento (In-Batch Negatives)...")
     
     for epoch in range(EPOCHS):
         model.train()
         total_loss = 0
+        inicio_epoca = time.time()
+        num_batches = 0
         
-        for u, i in train_loader:
-            u, i = u.to(device), i.to(device)
+        for u, i in fast_batch_generator(train_ds, BATCH_SIZE):
+            u, i = u.to(device, non_blocking=True), i.to(device, non_blocking=True)
             
             # Forward: Obtenemos los vectores de salida de las torres
             user_vectors = model.user_tower(u) # [B, D]
@@ -123,27 +132,18 @@ def train():
             optimizer.step()
             
             total_loss += loss.item()
+            num_batches += 1
 
-        print(f"  Época {epoch+1:02d}/{EPOCHS} | Loss: {total_loss/len(train_loader):.4f}")
+        print(f"  Época {epoch+1:02d}/{EPOCHS} | Loss: {total_loss/num_batches:.4f} | {time.time() - inicio_epoca:.1f}s")
         
     print("\n  Entrenamiento completado.")
 
-    # Guardado de artefactos con sufijo del umbral para no pisar modelos anteriores.
-    # Ejemplo: si MIN_RATINGS_USUARIO=100, genera modelo_7_twotowers_r100.pth
-    sufijo = f"_r{MIN_RATINGS_USUARIO}" if MIN_RATINGS_USUARIO != 1000 else ""
-    ruta_modelo_final = ruta_modelo.replace(".pth", f"{sufijo}.pth")
-    ruta_mapeos_final = ruta_mapeos.replace(".pkl", f"{sufijo}.pkl")
-
-    torch.save(model.state_dict(), ruta_modelo_final)
-    print(f"  Modelo guardado en: {ruta_modelo_final}")
-
-    # Guardar mappings (con sufijo)
-    with open(ruta_mapeos_final, "wb") as f:
-        pickle.dump({"user2idx": user2idx, "item2idx": item2idx}, f)
+    # Guardado .pth global (ya incluye el sufijo r100 en la ruta global)
+    torch.save(model.state_dict(), ruta_modelo)
+    print(f"  Modelo guardado en: {ruta_modelo}")
 
     # Exportar a ONNX
-    ruta_onnx = ruta_modelo_final.replace(".pth", ".onnx")
-    ruta_onnx = ruta_onnx.replace("checkpoints", "exports")
+    ruta_onnx = ruta_modelo.replace(".pth", ".onnx").replace("checkpoints", "exports")
     print(f"  Exportando a ONNX: {ruta_onnx}")
     model.cpu().eval()
 
@@ -167,7 +167,7 @@ def train():
             "min_ratings_user": MIN_RATINGS_USUARIO,
             "min_ratings_item": MIN_RATINGS_PELICULA,
         },
-        metricas={"Loss": total_loss/len(train_loader)},
+        metricas={"Loss": total_loss/num_batches},
         dataset_size=len(df_train)
     )
 

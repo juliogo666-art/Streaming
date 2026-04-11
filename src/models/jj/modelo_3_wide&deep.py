@@ -53,10 +53,8 @@ from src.utils.registrar_metricas import registrar_metricas
 # CONFIGURACIÓN GLOBAL
 # -----------------------------------------------------------------------------------------
 ruta_ratings = "src/data/ready/ratings_finales_ia.csv"
-ruta_modelo = (
-    "src/models/jj/modelo_3_wnd.pth"  # Formato oficial de PyTorch para pesajes
-)
-ruta_mapeos = "src/models/jj/wnd_mappings.pkl"  # Necesario para recordar qué ID real es cada vector
+ruta_modelo = "artifacts/checkpoints/modelo_3_wnd.pth"  # Checkpoint PyTorch
+ruta_mapeos = "artifacts/mappings/wnd_mappings.pkl"  # Mapeo de IDs reales <-> internos
 
 # Parámetros del Deep Learning (Hiperparámetros)
 BATCH_SIZE = (

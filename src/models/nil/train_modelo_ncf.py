@@ -68,9 +68,10 @@ except ImportError:
 # ---------------------------------------------------------------------------
 _MODELS_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_PATH: str = os.path.join(_MODELS_DIR, "..", "data", "ready", "ratings_finales_ia.csv")
-ONNX_PATH: str = os.path.join(_MODELS_DIR, "ncf_model.onnx")
-USER2IDX_PATH: str = os.path.join(_MODELS_DIR, "user2idx.json")
-ITEM2IDX_PATH: str = os.path.join(_MODELS_DIR, "item2idx.json")
+# Los artefactos entrenados se guardan centralizados en artifacts/
+ONNX_PATH: str = "artifacts/exports/nil_ncf_model.onnx"
+USER2IDX_PATH: str = "artifacts/mappings/nil_ncf_user2idx.json"
+ITEM2IDX_PATH: str = "artifacts/mappings/nil_ncf_item2idx.json"
 
 # Hiperparametros por defecto
 MIN_USER_RATINGS: int = 200   # Umbral K-Core para usuarios

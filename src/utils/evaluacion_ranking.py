@@ -15,21 +15,23 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..",
 RUTA_CATALOGO = "src/data/ready/dataset_final_movies.csv"
 RUTA_RATINGS = "src/data/ready/ratings_finales_ia.csv"
 
-# Modelos
-RUTA_SVD = "src/models/jj/modelo_1_SVD.pkl"
-RUTA_KNN = "src/models/jj/modelo_2.5_knn_msd.pkl"
-RUTA_WND_ONNX = "src/models/jj/modelo_3_wnd.onnx"
-RUTA_WND_MAP = "src/models/jj/wnd_mappings.pkl"
-RUTA_TFIDF_MOD = "src/models/jj/modelo_4_tfidf.pkl"
-RUTA_TFIDF_MAT = "src/models/jj/modelo_4_matriz.pkl"
-RUTA_TFIDF_IDX = "src/models/jj/modelo_4_indices.pkl"
-RUTA_IMP_MOD = "src/models/jj/modelo_5_implicit.pkl"
-RUTA_IMP_DAT = "src/models/jj/modelo_5_implicit_dataset.pkl"
-RUTA_NCF_ONNX = "src/models/jj/modelo_6_ncf.onnx"
-RUTA_NCF_USER2IDX = "src/models/jj/ncf_user2idx.json"
-RUTA_NCF_ITEM2IDX = "src/models/jj/ncf_item2idx.json"
-RUTA_TT_ONNX = "src/models/jj/modelo_7_twotowers.onnx"
-RUTA_TT_MAP = "src/models/jj/twotowers_mappings.pkl"
+# Pesos de modelos clásicos (guardados en artifacts/weights/)
+RUTA_SVD = "artifacts/weights/modelo_1_SVD.pkl"
+RUTA_KNN = "artifacts/weights/modelo_2.5_knn_msd.pkl"
+RUTA_TFIDF_MOD = "artifacts/weights/modelo_4_tfidf.pkl"
+RUTA_TFIDF_MAT = "artifacts/weights/modelo_4_matriz.pkl"
+RUTA_TFIDF_IDX = "artifacts/weights/modelo_4_indices.pkl"
+RUTA_IMP_MOD = "artifacts/weights/modelo_5_implicit.pkl"
+RUTA_IMP_DAT = "artifacts/weights/modelo_5_implicit_dataset.pkl"
+# Modelos exportados a ONNX (guardados en artifacts/exports/)
+RUTA_WND_ONNX = "artifacts/exports/modelo_3_wnd.onnx"
+RUTA_NCF_ONNX = "artifacts/exports/modelo_6_ncf.onnx"
+RUTA_TT_ONNX = "artifacts/exports/modelo_7_twotowers.onnx"
+# Mapeos de IDs internos <-> reales (guardados en artifacts/mappings/)
+RUTA_WND_MAP = "artifacts/mappings/wnd_mappings.pkl"
+RUTA_NCF_USER2IDX = "artifacts/mappings/ncf_user2idx.json"
+RUTA_NCF_ITEM2IDX = "artifacts/mappings/ncf_item2idx.json"
+RUTA_TT_MAP = "artifacts/mappings/twotowers_mappings.pkl"
 
 # Guardar Resultados
 RUTA_RESULTADOS = "src/utils/metricas_ranking.csv"
@@ -50,6 +52,7 @@ from src.metrics.recall import RecallAtK
 from src.metrics.hitrate import HitRateAtK
 from src.metrics.ndcg import NDCGAtK
 from src.metrics.coverage import CoverageAtK
+from src.metrics.mrr import MRRAtK
 
 
 # ======================================================================================
@@ -344,6 +347,9 @@ def evaluar():
         CoverageAtK(
             catalog_size=tamano_del_catalogo
         ),  # ¿Se arriesga con distintas opciones o siempre recomienda Marvel?
+        MRRAtK(
+            user_col="userId", item_col="tmdb_id"
+        ),  # ¿En qué posición aparece el primer acierto?
     ]
     pipeline_juez = EvaluationPipeline(metrics=mis_metricas)
 
@@ -502,6 +508,14 @@ def evaluar():
         # Le decimos al sistema central: "Evalúa este modelo dadas sus respuestas y las correctas"
         pipeline_juez.evaluate_model(
             nombre_bonito, predicciones_modelo, mega_examen_oficial, k=K
+        )
+
+        # Registramos automáticamente estos resultados en el CSV centralizado
+        # para que no se pierdan y queden en el historial de experimentos
+        pipeline_juez.registrar_resultados_en_csv(
+            nombre_modelo=nombre_bonito,
+            tamano_dataset=len(df_interacciones),
+            notas=f"Evaluación ranking K={K}, {len(usuarios_test)} usuarios test",
         )
 
     # El tribunal escupe el tablero de puntuaciones limpio

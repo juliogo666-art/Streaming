@@ -50,9 +50,9 @@ from src.utils.registrar_metricas import registrar_metricas
 RUTA_RATINGS = "src/data/ready/ratings_finales_ia.csv"
 
 # Rutas de salida (artefactos de producción)
-RUTA_MODELO_ONNX = "src/models/jj/modelo_6_ncf.onnx"
-RUTA_USER2IDX = "src/models/jj/ncf_user2idx.json"
-RUTA_ITEM2IDX = "src/models/jj/ncf_item2idx.json"
+RUTA_MODELO_ONNX = "artifacts/exports/modelo_6_ncf.onnx"
+RUTA_USER2IDX = "artifacts/mappings/ncf_user2idx.json"
+RUTA_ITEM2IDX = "artifacts/mappings/ncf_item2idx.json"
 
 # Hiperparámetros
 EMB_DIM = 32  # Dimensión de los embeddings

@@ -18,8 +18,8 @@ from src.utils.registrar_metricas import registrar_metricas
 # CONFIGURACIÓN
 # -----------------------------------------------------------------------------------------
 ruta_ratings = "src/data/ready/ratings_finales_ia.csv"
-ruta_modelo = "src/models/jj/modelo_7_twotowers.pth"
-ruta_mapeos = "src/models/jj/twotowers_mappings.pkl"
+ruta_modelo = "artifacts/checkpoints/modelo_7_twotowers.pth"
+ruta_mapeos = "artifacts/mappings/twotowers_mappings.pkl"
 
 BATCH_SIZE = 2048
 EPOCHS = 5

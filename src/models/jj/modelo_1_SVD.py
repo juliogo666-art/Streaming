@@ -38,8 +38,8 @@ from surprise import accuracy
 # Ruta al archivo CSV con las valoraciones (userId, tmdb_id, rating)
 ruta_ratings = "src/data/ready/ratings_finales_ia.csv"
 
-# Ruta donde guardaremos el modelo ya entrenado para que el Backend lo cargue sin re-entrenar
-ruta_modelo = "src/models/jj/modelo_1_SVD.pkl"
+# Ruta donde guardaremos el modelo ya entrenado (centralizado en artifacts/)
+ruta_modelo = "artifacts/weights/modelo_1_SVD.pkl"
 
 # Mínimo de valoraciones que debe tener un usuario para incluirlo en el entrenamiento.
 # Usuarios con pocas valoraciones aportan ruido y ralentizan el proceso.

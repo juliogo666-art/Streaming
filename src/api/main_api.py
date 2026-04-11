@@ -39,20 +39,23 @@ logger.setLevel(logging.INFO)
 ruta_ratings = "src/data/ready/ratings_finales_ia.csv"
 ruta_catalogo = "src/data/ready/dataset_final_movies.csv"
 
-# --- RUTAS DE MODELOS (Sincronizadas con disco) ---
-ruta_modelo_svd = "src/models/jj/modelo_1_SVD.joblib"
-ruta_modelo_knn = "src/models/jj/modelo_2.5_knn_msd.joblib"
-ruta_modelo_wnd = "src/models/jj/modelo_3_wnd.onnx"
-ruta_wnd_map = "src/models/jj/wnd_mappings.pkl"
-ruta_tfidf_mat = "src/models/jj/modelo_4_matriz.joblib"
-ruta_tfidf_idx = "src/models/jj/modelo_4_indices.joblib"
-ruta_imp = "src/models/jj/modelo_5_implicit.pkl"
-ruta_imp_dat = "src/models/jj/modelo_5_implicit_dataset.pkl"
-ruta_modelo_ncf = "src/models/jj/modelo_6_ncf.onnx"
-ruta_ncf_user2idx = "src/models/jj/ncf_user2idx.json"
-ruta_ncf_item2idx = "src/models/jj/ncf_item2idx.json"
-ruta_modelo_tt = "src/models/jj/modelo_7_twotowers.onnx"
-ruta_tt_map = "src/models/jj/twotowers_mappings.pkl"
+# --- RUTAS DE MODELOS (Centralizadas en artifacts/) ---
+# Pesos de modelos clásicos (Surprise, sklearn, implicit)
+ruta_modelo_svd = "artifacts/weights/modelo_1_SVD.joblib"
+ruta_modelo_knn = "artifacts/weights/modelo_2.5_knn_msd.joblib"
+ruta_tfidf_mat = "artifacts/weights/modelo_4_matriz.joblib"
+ruta_tfidf_idx = "artifacts/weights/modelo_4_indices.joblib"
+ruta_imp = "artifacts/weights/modelo_5_implicit.pkl"
+ruta_imp_dat = "artifacts/weights/modelo_5_implicit_dataset.pkl"
+# Modelos exportados a ONNX (inferencia sin PyTorch)
+ruta_modelo_wnd = "artifacts/exports/modelo_3_wnd.onnx"
+ruta_modelo_ncf = "artifacts/exports/modelo_6_ncf.onnx"
+ruta_modelo_tt = "artifacts/exports/modelo_7_twotowers.onnx"
+# Mapeos de IDs internos <-> reales (necesarios para ONNX y BPR)
+ruta_wnd_map = "artifacts/mappings/wnd_mappings.pkl"
+ruta_ncf_user2idx = "artifacts/mappings/ncf_user2idx.json"
+ruta_ncf_item2idx = "artifacts/mappings/ncf_item2idx.json"
+ruta_tt_map = "artifacts/mappings/twotowers_mappings.pkl"
 
 
 @asynccontextmanager

@@ -44,7 +44,7 @@ from surprise import accuracy
 UBICACION_DE_VALORACIONES = "src/data/ready/ratings_finales_ia.csv"
 
 # ¿Dónde guardaremos el cerebro de la IA una vez entrenado?
-UBICACION_PARA_GUARDAR_MODELO = "src/models/jj/modelo_2.5_knn_msd.pkl"
+UBICACION_PARA_GUARDAR_MODELO = "artifacts/weights/modelo_2.5_knn_msd.pkl"
 
 # Filtros para no sobrecargar el ordenador (porque calcular millones de vecinos peta la Memoria RAM)
 MINIMO_PELIS_VISTAS_POR_USUARIO = 50

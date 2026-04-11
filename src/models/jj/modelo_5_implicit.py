@@ -36,9 +36,9 @@ RUTA_RATINGS = "src/data/ready/ratings_finales_ia.csv"
 RUTA_CATALOGO = "src/data/ready/dataset_final_movies.csv"
 
 # Rutas de salida del modelo
-RUTA_MODELO = "src/models/jj/modelo_5_implicit.pkl"
-RUTA_DATASET = "src/models/jj/modelo_5_implicit_dataset.pkl"
-RUTA_METRICAS = "src/models/jj/modelo_5_metricas.json"
+RUTA_MODELO = "artifacts/weights/modelo_5_implicit.pkl"
+RUTA_DATASET = "artifacts/weights/modelo_5_implicit_dataset.pkl"
+RUTA_METRICAS = "artifacts/weights/modelo_5_metricas.json"
 
 # Hiperparámetros
 UMBRAL_POSITIVO = 3.5

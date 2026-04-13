@@ -4,6 +4,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 import os
+import json
 import time
 import extra_streamlit_components as stx  # Librería extra para manejar Cookies en el navegador
 
@@ -255,78 +256,68 @@ else:
 
     with tab2:
         st.subheader("Análisis Exploratorio de Datos del Catálogo")
-        movies_path = "src/data/ready/dataset_final_movies.csv"
-        ratings_path = "src/data/ready/ratings_finales_ia.csv"
 
-        # os.path.exists sirve para que no pete la web al intentar cargar un archivo si algún desarrollador
-        # todavía no ha generado la carpeta 'ready'. Comprueba si físicamente están ahí.
-        if os.path.exists(movies_path) and os.path.exists(ratings_path):
-            try:
-                # Carga de datos
-                df_movies = pd.read_csv(
-                    movies_path, on_bad_lines="skip", engine="python"
-                )
-                df_ratings = pd.read_csv(
-                    ratings_path, on_bad_lines="skip", engine="python"
-                )
+        EDA_DIR = "static/eda"
+        img_top10 = os.path.join(EDA_DIR, "top10_peliculas.png")
+        img_usuarios = os.path.join(EDA_DIR, "distribucion_valoraciones_usuario.png")
+        img_puntuaciones = os.path.join(EDA_DIR, "distribucion_puntuaciones.png")
+        json_metricas = os.path.join(EDA_DIR, "metricas.json")
 
-                # Gráfico 1: Top 10 pelis
-                st.markdown(
-                    "### Top 10 Películas con Mejores Valoraciones (Mín. 500 votos)"
-                )
-                top_movies = (
-                    df_movies[df_movies["vote_count"] > 500]
-                    .sort_values(by="vote_average", ascending=False)
-                    .head(10)
-                )
-                fig1, ax1 = plt.subplots(figsize=(10, 6))
-                sns.barplot(
-                    x="vote_average",
-                    y="titulo",
-                    data=top_movies,
-                    palette="viridis",
-                    ax=ax1,
-                )
-                ax1.set_xlabel("Nota Media (Promedio de votos)")
-                ax1.set_ylabel("Título")
-                st.pyplot(fig1)
+        # Comprobamos si el administrador ya ha generado las imágenes estáticas
+        charts_generados = all(
+            os.path.exists(p) for p in [img_top10, img_usuarios, img_puntuaciones]
+        )
 
-                st.divider()
+        if not charts_generados:
+            st.warning(
+                "**Las imágenes del EDA no se han generado aún.**\n\n"
+                "Ejecuta el script offline desde la raíz del proyecto con:\n\n"
+                "```\npython -m src.scripts.generar_eda_charts\n```\n\n"
+                "Esto generará las gráficas en `static/eda/` y la próxima vez cargarán al instante."
+            )
+        else:
+            st.markdown(
+                "### Top 10 Películas con Mejores Valoraciones (Mín. 500 votos)"
+            )
+            st.image(img_top10, use_container_width=True)
 
-                # Gráfico 2: Distribución de valoraciones por usuario
-                st.markdown(
-                    "### Distribución de la Cantidad de Valoraciones por Usuario"
-                )
-                user_counts = df_ratings["userId"].value_counts()
-                fig2, ax2 = plt.subplots(figsize=(10, 6))
-                sns.histplot(user_counts, bins=100, kde=True, color="blue", ax=ax2)
-                ax2.set_xlabel("Número de películas valoradas por el usuario")
-                ax2.set_ylabel("Cantidad de Usuarios")
-                ax2.set_xlim(0, 500)
-                st.pyplot(fig2)
+            st.divider()
 
-                # Info importante
+            st.markdown("### Distribución de Valoraciones por Usuario")
+            st.image(img_usuarios, use_container_width=True)
+
+            # Métricas desde JSON (calculadas una sola vez offline)
+            if os.path.exists(json_metricas):
+                with open(json_metricas, "r", encoding="utf-8") as f:
+                    m = json.load(f)
                 cols_info = st.columns(3)
                 cols_info[0].metric(
-                    "Media valoraciones / usuario", f"{user_counts.mean():.2f}"
+                    "Media valoraciones / usuario",
+                    f"{m.get('media_valoraciones_usuario', '—')}",
                 )
                 cols_info[1].metric(
-                    "Usuarios con < 20 valoraciones", f"{(user_counts < 20).sum()}"
+                    "Usuarios con < 20 valoraciones",
+                    f"{m.get('usuarios_menos_20_valoraciones', '—'):,}",
                 )
-                cols_info[2].metric("Total de usuarios", f"{len(user_counts)}")
+                cols_info[2].metric(
+                    "Total de usuarios", f"{m.get('total_usuarios', '—'):,}"
+                )
 
-                st.divider()
+            st.divider()
 
-                # Gráfico 3: Distribución general de Puntuaciones
-                st.markdown("### Distribución general de Puntuaciones (Estrellas)")
-                fig3, ax3 = plt.subplots(figsize=(10, 6))
-                sns.countplot(x="rating", data=df_ratings, palette="coolwarm", ax=ax3)
-                ax3.set_xlabel("Puntuación (Rating)")
-                ax3.set_ylabel("Cantidad de Votos")
-                st.pyplot(fig3)
+            st.markdown("### Distribución General de Puntuaciones (Estrellas)")
+            st.image(img_puntuaciones, use_container_width=True)
 
-            except Exception as e:
-                st.error(f"Error al procesar datos para EDA: {e}")
+            # Información sobre cuándo se generaron las imágenes
+            mtime = os.path.getmtime(img_top10)
+            import datetime
+
+            fecha_gen = datetime.datetime.fromtimestamp(mtime).strftime(
+                "%d/%m/%Y %H:%M"
+            )
+            st.caption(
+                f"Charts generados el {fecha_gen} · Para actualizar ejecuta `python -m src.scripts.generar_eda_charts`"
+            )
 
     with tab3:
         st.subheader("Evaluación Comparativa de Modelos de Recomendación")

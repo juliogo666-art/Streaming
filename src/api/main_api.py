@@ -1,10 +1,12 @@
 from contextlib import asynccontextmanager
 import logging
+import time
 
 from fastapi import FastAPI, HTTPException
 from .database import get_db_connection
 from .etl import ejecutar_importacion, limpiar_tablas_contenido
 from ..schemas.schemas import LoginRequest, RegisterRequest
+
 # [PASO 1: SCHEMAS] Definimos la salida estricta de la API para que frontend no falle
 from src.schemas.recommendation import RecommendationResponse
 
@@ -61,8 +63,12 @@ ruta_tt_map = "artifacts/mappings/twotowers_mappings.pkl"
 @asynccontextmanager
 async def lifespan(the_app: FastAPI):
     """Gestiona el ciclo de vida de la aplicación: carga modelos al arrancar, limpia al cerrar."""
+    t_startup_total = time.perf_counter()
     logger.info("[STARTUP] Iniciando carga de modelos de IA en memoria...")
-    logger.info("[INFO] Cargando ratings (434MB)... espera unos 30-40s.")
+    logger.info("[INFO] Cargando ratings (~434MB)... espera unos 30-40s.")
+
+    # Diccionario para acumular tiempos y generar el benchmark al final
+    _bench: dict[str, float] = {}
 
     # --- Inicialización de estado ---
     the_app.state.modelo_svd = None
@@ -82,49 +88,63 @@ async def lifespan(the_app: FastAPI):
     the_app.state.tt_mappings = None
 
     # --- Modelo 1: SVD ---
+    _t0 = time.perf_counter()
     if os.path.exists(ruta_modelo_svd):
         try:
             import joblib
+
             the_app.state.modelo_svd = joblib.load(ruta_modelo_svd)
             logger.info("Modelo SVD cargado correctamente (Joblib).")
         except Exception as e:
             logger.error(f"No se pudo cargar el modelo SVD: {e}.")
+    _bench["Modelo 1 · SVD (Joblib)"] = time.perf_counter() - _t0
 
     # --- Modelo 2: KNN ---
+    _t0 = time.perf_counter()
     if os.path.exists(ruta_modelo_knn):
         try:
             import joblib
+
             the_app.state.modelo_knn = joblib.load(ruta_modelo_knn)
             logger.info("Modelo KNN+Cosine cargado (Joblib).")
         except Exception as e:
             logger.error(f"No se pudo cargar el modelo KNN: {e}")
+    _bench["Modelo 2 · KNN+Cosine (Joblib)"] = time.perf_counter() - _t0
 
     # --- Modelo 3: Wide & Deep (ONNX Runtime) ---
+    _t0 = time.perf_counter()
     if os.path.exists(ruta_modelo_wnd) and os.path.exists(ruta_wnd_map):
         try:
             import onnxruntime as ort
             import pickle
+
             the_app.state.modelo_wnd = ort.InferenceSession(ruta_modelo_wnd)
             with open(ruta_wnd_map, "rb") as f:
                 the_app.state.wnd_mappings = pickle.load(f)
             logger.info("Modelo Wide&Deep ONNX cargado correctamente.")
         except Exception as e:
             logger.error(f"No se pudo cargar el modelo Wide&Deep: {e}")
+    _bench["Modelo 3 · Wide&Deep (ONNX)"] = time.perf_counter() - _t0
 
     # --- Modelo 4: Content-Based (TF-IDF) ---
+    _t0 = time.perf_counter()
     if os.path.exists(ruta_tfidf_mat) and os.path.exists(ruta_tfidf_idx):
         try:
             import joblib
+
             the_app.state.modelo_tfidf_mat = joblib.load(ruta_tfidf_mat)
             the_app.state.modelo_tfidf_idx = joblib.load(ruta_tfidf_idx)
             logger.info("Modelo TF-IDF cargado correctamente (Joblib).")
         except Exception as e:
             logger.error(f"No se pudo cargar el modelo TF-IDF: {e}")
+    _bench["Modelo 4 · TF-IDF Content-Based (Joblib)"] = time.perf_counter() - _t0
 
     # --- Modelo 5: Implicit BPR ---
+    _t0 = time.perf_counter()
     if os.path.exists(ruta_imp) and os.path.exists(ruta_imp_dat):
         try:
             import pickle
+
             with open(ruta_imp, "rb") as f:
                 the_app.state.modelo_imp = pickle.load(f)
             with open(ruta_imp_dat, "rb") as f:
@@ -132,49 +152,87 @@ async def lifespan(the_app: FastAPI):
             logger.info("Modelo Implicit cargado correctamente.")
         except Exception as e:
             logger.error(f"No se pudo cargar el modelo Implicit: {e}")
+    _bench["Modelo 5 · Implicit BPR (Pickle)"] = time.perf_counter() - _t0
 
     # --- Modelo 6: NCF (ONNX) ---
+    _t0 = time.perf_counter()
     if os.path.exists(ruta_modelo_ncf):
         try:
             import onnxruntime as ort
             import json
+
             the_app.state.modelo_ncf = ort.InferenceSession(ruta_modelo_ncf)
             if os.path.exists(ruta_ncf_user2idx):
                 with open(ruta_ncf_user2idx, "r") as f:
-                    the_app.state.ncf_user2idx = {int(k): v for k, v in json.load(f).items()}
+                    the_app.state.ncf_user2idx = {
+                        int(k): v for k, v in json.load(f).items()
+                    }
             if os.path.exists(ruta_ncf_item2idx):
                 with open(ruta_ncf_item2idx, "r") as f:
-                    the_app.state.ncf_item2idx = {int(k): v for k, v in json.load(f).items()}
+                    the_app.state.ncf_item2idx = {
+                        int(k): v for k, v in json.load(f).items()
+                    }
             logger.info("Modelo NCF ONNX cargado correctamente.")
         except Exception as e:
             logger.error(f"No se pudo cargar el modelo NCF: {e}")
+    _bench["Modelo 6 · NCF (ONNX)"] = time.perf_counter() - _t0
 
     # --- Modelo 7: Two Towers (ONNX) ---
+    _t0 = time.perf_counter()
     if os.path.exists(ruta_modelo_tt) and os.path.exists(ruta_tt_map):
         try:
             import onnxruntime as ort
             import pickle
+
             the_app.state.modelo_tt = ort.InferenceSession(ruta_modelo_tt)
             with open(ruta_tt_map, "rb") as f:
                 the_app.state.tt_mappings = pickle.load(f)
             logger.info("Modelo TwoTowers ONNX cargado correctamente.")
         except Exception as e:
             logger.error(f"No se pudo cargar el modelo TwoTowers: {e}")
+    _bench["Modelo 7 · TwoTowers (ONNX)"] = time.perf_counter() - _t0
 
     # --- CARGA DE DATOS (CSV) ---
+    _t0 = time.perf_counter()
     try:
         if os.path.exists(ruta_ratings):
             the_app.state.df_ratings_ia = pd.read_csv(ruta_ratings)
-            logger.info(f"Ratings cargados: {len(the_app.state.df_ratings_ia):,} filas.")
+            logger.info(
+                f"Ratings cargados: {len(the_app.state.df_ratings_ia):,} filas."
+            )
             # Pre-calcular conteos para velocidad O(1) en mensajes de progreso
-            the_app.state.user_counts = the_app.state.df_ratings_ia.groupby("userId").size().to_dict()
+            the_app.state.user_counts = (
+                the_app.state.df_ratings_ia.groupby("userId").size().to_dict()
+            )
+    except Exception as e:
+        logger.error(f"Error al cargar CSV de ratings: {e}")
+    _bench["CSV · ratings_finales_ia (~434MB)"] = time.perf_counter() - _t0
+
+    _t0 = time.perf_counter()
+    try:
         if os.path.exists(ruta_catalogo):
             the_app.state.df_catalogo = pd.read_csv(ruta_catalogo)
-            logger.info(f"Catálogo cargado: {len(the_app.state.df_catalogo):,} películas.")
+            logger.info(
+                f"Catálogo cargado: {len(the_app.state.df_catalogo):,} películas."
+            )
     except Exception as e:
-        logger.error(f"Error al cargar archivos CSV de datos: {e}")
+        logger.error(f"Error al cargar CSV de catálogo: {e}")
+    _bench["CSV · dataset_final_movies"] = time.perf_counter() - _t0
 
-    logger.info("[STARTUP] Carga de modelos completada.")
+    # ── BENCHMARK RESUMEN ─────────────────────────────────────────────────────
+    t_total = time.perf_counter() - t_startup_total
+    sep = "─" * 55
+    logger.info(f"[BENCHMARK] {sep}")
+    for nombre, segundos in _bench.items():
+        # Marca los que superan 5 segundos como posibles cuellos de botella
+        alerta = "LENTO" if segundos > 5.0 else ""
+        logger.info(f"[BENCHMARK]   {nombre:<42} {segundos:>6.2f}s{alerta}")
+    logger.info(f"[BENCHMARK] {sep}")
+    logger.info(f"[BENCHMARK]   {'TOTAL ARRANQUE':<42} {t_total:>6.2f}s")
+    logger.info(f"[BENCHMARK] {sep}")
+    # ─────────────────────────────────────────────────────────────────────────
+
+    logger.info("[STARTUP] Sistema listo para servir peticiones.")
     yield  # La app está corriendo
     logger.info("[SHUTDOWN] Cerrando aplicación...")
 
@@ -384,9 +442,6 @@ def register(datos: RegisterRequest):
         conn.close()
 
 
-
-
-
 @app.get("/recomendar/svd/{user_id}", response_model=RecommendationResponse)
 @app.get("/recomendar/{user_id}", response_model=RecommendationResponse)
 def recomendar_peliculas(user_id: int, n: int = 10):
@@ -561,7 +616,7 @@ def recomendar_wnd_endpoint(user_id: int, n: int = 10):
             "recomendaciones": [],
             "modelo": "Wide&Deep (ONNX)",
             "mensaje": f"No alcanzas las 1000 valoraciones ({count}/1000).",
-            "insufficient_data": True
+            "insufficient_data": True,
         }
 
     u_idx = user2idx[user_id]
@@ -606,9 +661,12 @@ def recomendar_wnd_endpoint(user_id: int, n: int = 10):
         return 1 / (1 + np.exp(-np.clip(x, -20, 20)))
 
     preds_prob = sigmoid(preds_raw)
-    
+
     predicciones = [
-        {"tmdb_id": int(tid), "predicted_rating": round(float(preds_prob[i] * 4.5 + 0.5), 2)}
+        {
+            "tmdb_id": int(tid),
+            "predicted_rating": round(float(preds_prob[i] * 4.5 + 0.5), 2),
+        }
         for i, tid in enumerate(tmdb_ids)
     ]
 
@@ -663,7 +721,9 @@ def recomendar_content_endpoint(user_id: int, n: int = 10):
         enriquecer_recomendaciones(recomendaciones)
 
         # Telemetría: Registra evento
-        telemetria.log_recommendations(str(user_id), "TF-IDF (Cold Start Populares)", recomendaciones)
+        telemetria.log_recommendations(
+            str(user_id), "TF-IDF (Cold Start Populares)", recomendaciones
+        )
 
         return {
             "recomendaciones": recomendaciones,
@@ -804,12 +864,11 @@ def recomendar_ncf_endpoint(user_id: int, n: int = 10):
     if app.state.modelo_ncf is None:
         raise HTTPException(
             status_code=503,
-            detail="Modelo NCF no cargado. Ejecuta modelo_6_ncf.py para generar los artefactos."
+            detail="Modelo NCF no cargado. Ejecuta modelo_6_ncf.py para generar los artefactos.",
         )
     if app.state.ncf_user2idx is None or app.state.ncf_item2idx is None:
         raise HTTPException(
-            status_code=503,
-            detail="Mapeos NCF (user2idx/item2idx) no cargados."
+            status_code=503, detail="Mapeos NCF (user2idx/item2idx) no cargados."
         )
 
     # Verificar que el usuario existe en el vocabulario del modelo
@@ -820,7 +879,7 @@ def recomendar_ncf_endpoint(user_id: int, n: int = 10):
             "recomendaciones": [],
             "modelo": "NCF",
             "mensaje": f"No alcanzas las 1000 valoraciones ({count}/1000).",
-            "insufficient_data": True
+            "insufficient_data": True,
         }
 
     user_idx = app.state.ncf_user2idx[user_id]
@@ -836,13 +895,14 @@ def recomendar_ncf_endpoint(user_id: int, n: int = 10):
 
         # La salida de ONNX suele ser (N, 1). La aplanamos a (N,)
         scores = app.state.modelo_ncf.run(
-            None,
-            {"user_ids": user_ids_np, "item_ids": item_ids_np}
+            None, {"user_ids": user_ids_np, "item_ids": item_ids_np}
         )[0].flatten()
 
         # Excluir items ya vistos
         if app.state.df_ratings_ia is not None:
-            user_ratings = app.state.df_ratings_ia[app.state.df_ratings_ia["userId"] == user_id]
+            user_ratings = app.state.df_ratings_ia[
+                app.state.df_ratings_ia["userId"] == user_id
+            ]
             pelis_vistas = set(user_ratings["tmdb_id"].unique())
             for tid in pelis_vistas:
                 if tid in app.state.ncf_item2idx:
@@ -850,7 +910,7 @@ def recomendar_ncf_endpoint(user_id: int, n: int = 10):
                     # midx es el valor (v) de item2idx
                     # Queremos poner el score de esa peli a -inf
                     # Pero OJO: 'scores' está indexado por el orden de 'item_ids_np'
-                    # Como item_ids_np es np.array(list(item2idx.values())), el índice 
+                    # Como item_ids_np es np.array(list(item2idx.values())), el índice
                     # de un midx está en su propia posición si values() es secuencial.
                     # Para ser 100% seguros, usamos el mapeo directo
                     scores[midx] = -np.inf
@@ -892,10 +952,10 @@ def recomendar_ncf_endpoint(user_id: int, n: int = 10):
 def recomendar_tt_endpoint(user_id: int, n: int = 10):
     """Endpoint de recomendaciones usando Two Towers Neural Network (ONNX)."""
     logger.info(f"Petición TwoTowers para User {user_id}")
-    
+
     if app.state.modelo_tt is None or app.state.tt_mappings is None:
         raise HTTPException(status_code=503, detail="Modelo TwoTowers no cargado.")
-        
+
     user2idx = app.state.tt_mappings["user2idx"]
     item2idx = app.state.tt_mappings["item2idx"]
     idx2item = {v: k for k, v in item2idx.items()}
@@ -907,19 +967,19 @@ def recomendar_tt_endpoint(user_id: int, n: int = 10):
             "recomendaciones": [],
             "modelo": "Two-Towers",
             "mensaje": f"No alcanzas las 1000 valoraciones ({count}/1000).",
-            "insufficient_data": True
+            "insufficient_data": True,
         }
 
     u_idx = user2idx[user_id]
-    
+
     # Puntuar items (Batch inference)
     # Para velocidad en demo local puntuamos solo items que conoce el modelo
     tids_candidatos = list(item2idx.keys())
     i_indices = list(item2idx.values())
-    
+
     user_arr = np.full(len(i_indices), u_idx, dtype=np.int64)
     item_arr = np.array(i_indices, dtype=np.int64)
-    
+
     try:
         ort_inputs = {"user_ids": user_arr, "item_ids": item_arr}
         # El modelo TT devuelve similitud (producto escalar)
@@ -930,21 +990,28 @@ def recomendar_tt_endpoint(user_id: int, n: int = 10):
 
     # Filtrar ya vistas
     if app.state.df_ratings_ia is not None:
-        vistas = set(app.state.df_ratings_ia[app.state.df_ratings_ia["userId"] == user_id]["tmdb_id"])
+        vistas = set(
+            app.state.df_ratings_ia[app.state.df_ratings_ia["userId"] == user_id][
+                "tmdb_id"
+            ]
+        )
         for idx, tid in enumerate(tids_candidatos):
             if tid in vistas:
                 scores[idx] = -np.inf
 
     top_indices = np.argsort(scores)[::-1][:n]
-    
+
     predicciones = []
     for idx in top_indices:
-        if scores[idx] == -np.inf: continue
+        if scores[idx] == -np.inf:
+            continue
         tid = idx2item[item_arr[idx]]
         # Escalar similitud arbitraria a 0.5-5.0 para UI
         s = float(scores[idx])
         rating_ui = min(5.0, max(0.5, 3.5 + (s * 0.1)))
-        predicciones.append({"tmdb_id": int(tid), "predicted_rating": round(rating_ui, 2)})
+        predicciones.append(
+            {"tmdb_id": int(tid), "predicted_rating": round(rating_ui, 2)}
+        )
 
     enriquecer_recomendaciones(predicciones)
 
@@ -952,4 +1019,3 @@ def recomendar_tt_endpoint(user_id: int, n: int = 10):
     telemetria.log_recommendations(str(user_id), "Two-Towers", predicciones)
 
     return {"recomendaciones": predicciones, "modelo": "Two-Towers"}
-

@@ -615,7 +615,7 @@ def recomendar_wnd_endpoint(user_id: int, n: int = 10):
         return {
             "recomendaciones": [],
             "modelo": "Wide&Deep (ONNX)",
-            "mensaje": f"No alcanzas las 1000 valoraciones ({count}/1000).",
+            "mensaje": f"No alcanzas las 100 valoraciones requeridas ({count}/100).",
             "insufficient_data": True,
         }
 
@@ -878,7 +878,7 @@ def recomendar_ncf_endpoint(user_id: int, n: int = 10):
         return {
             "recomendaciones": [],
             "modelo": "NCF",
-            "mensaje": f"No alcanzas las 1000 valoraciones ({count}/1000).",
+            "mensaje": f"No alcanzas las 100 valoraciones requeridas ({count}/100).",
             "insufficient_data": True,
         }
 
@@ -966,7 +966,7 @@ def recomendar_tt_endpoint(user_id: int, n: int = 10):
         return {
             "recomendaciones": [],
             "modelo": "Two-Towers",
-            "mensaje": f"No alcanzas las 1000 valoraciones ({count}/1000).",
+            "mensaje": f"No alcanzas las 50 valoraciones requeridas ({count}/50).",
             "insufficient_data": True,
         }
 

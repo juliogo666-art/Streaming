@@ -1540,6 +1540,7 @@ dependencies = [
     { name = "scikit-surprise" },
     { name = "seaborn" },
     { name = "streamlit" },
+    { name = "surprise" },
     { name = "torch" },
     { name = "uvicorn" },
 ]
@@ -1566,6 +1567,7 @@ requires-dist = [
     { name = "scikit-surprise", specifier = ">=1.1.4" },
     { name = "seaborn", specifier = ">=0.13.2" },
     { name = "streamlit", specifier = ">=1.55.0" },
+    { name = "surprise", specifier = ">=0.1" },
     { name = "torch", specifier = ">=2.11.0" },
     { name = "uvicorn", specifier = ">=0.41.0" },
 ]
@@ -2134,6 +2136,17 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/92/8e/f2b8b4fa8ba65aae251170c54f8ce198fb588fc348301c2b624f8c63efac/streamlit-1.55.0.tar.gz", hash = "sha256:015e512bbd02d000f4047e51118dc086b70e7d9c46b4a11a33c2509731379626", size = 8612008, upload-time = "2026-03-03T22:26:02.149Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/dc/e6/412c1e1f200ca8c32ecf10201839183e261ad61ced3ede34a66f6d4be3cf/streamlit-1.55.0-py3-none-any.whl", hash = "sha256:1e4a16449c6131696180f4ddb40ea8c51834e89c2a43e1b0362bc9b1cfd9b415", size = 9075714, upload-time = "2026-03-03T22:25:59.126Z" },
+]
+
+[[package]]
+name = "surprise"
+version = "0.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "scikit-surprise" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/61/de/e5cba8682201fcf9c3719a6fdda95693468ed061945493dea2dd37c5618b/surprise-0.1-py2.py3-none-any.whl", hash = "sha256:0b5ad9b2e1c07ad74b93ece2e74beca83a05e32c7bd2ff2dcff7261e4cad0305", size = 1821, upload-time = "2017-01-14T13:39:47.865Z" },
 ]
 
 [[package]]

@@ -433,7 +433,7 @@ else:
                 elif "insufficient_data" in datos or "No alcanzas" in mensaje:
                     st.info(f"**Requisito del Modelo**: {mensaje}")
                     st.caption(
-                        "Esta red neuronal requiere que el usuario tenga un historial denso (1000+ valoraciones) para capturar patrones profundos de comportamiento."
+                        "Esta red neuronal requiere que el usuario tenga un historial denso de valoraciones para capturar patrones profundos de comportamiento."
                     )
                 else:
                     st.info("No se encontraron recomendaciones para tu perfil.")

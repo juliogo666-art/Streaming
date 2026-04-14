@@ -25,6 +25,7 @@ dependencies = [
     "scikit-surprise>=1.1.4",
     "seaborn>=0.13.2",
     "streamlit>=1.55.0",
+    "surprise>=0.1",
     "torch>=2.11.0",
     "uvicorn>=0.41.0",
 ]

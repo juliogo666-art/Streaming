@@ -712,15 +712,46 @@ def recomendar_content_endpoint(user_id: int, n: int = 10):
 
     # Cold Start (Usuario sin historial)
     if user_ratings.empty:
-        # Recomendamos por popularidad general
-        if "vote_count" in app.state.df_catalogo.columns:
+        # 1. Intentar obtener los intereses del usuario (géneros) de la BD
+        intereses_usuario = []
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor(dictionary=True)
+            cursor.execute("SELECT genre_id FROM user_interests WHERE id_usuario = %s", (user_id,))
+            rows = cursor.fetchall()
+            intereses_usuario = [row["genre_id"] for row in rows]
+            cursor.close()
+            conn.close()
+        except Exception as e:
+            print(f"Error obteniendo intereses del usuario {user_id}: {e}")
+
+        # 2. Filtrar el catálogo base a esos géneros
+        if intereses_usuario:
+            import re
+            # Usar regex para buscar IDs exactos (boundary \b) en el string '[gen1, gen2]'
+            patron = r'\b(?:' + '|'.join(map(str, intereses_usuario)) + r')\b'
+            mask = app.state.df_catalogo["genre_ids"].str.contains(patron, na=False, regex=True)
+            catalogo_filtrado = app.state.df_catalogo[mask]
+            nomb_modelo = "TF-IDF (Cold Start Géneros)"
+        else:
+            catalogo_filtrado = app.state.df_catalogo
+            nomb_modelo = "TF-IDF (Cold Start Populares)"
+
+        # Fallback por si el filtrado se quedó en blanco
+        if catalogo_filtrado.empty:
+            catalogo_filtrado = app.state.df_catalogo
+
+        # 3. Sort por popularidad dentro del filtro
+        if "vote_count" in catalogo_filtrado.columns:
             top_pop = (
-                app.state.df_catalogo[app.state.df_catalogo["vote_count"] > 100]
+                catalogo_filtrado[catalogo_filtrado["vote_count"] > 100]
                 .sort_values(by="vote_average", ascending=False)
                 .head(n)
             )
+            if len(top_pop) < n:
+                 top_pop = catalogo_filtrado.sort_values(by="vote_average", ascending=False).head(n)
         else:
-            top_pop = app.state.df_catalogo.head(n)
+            top_pop = catalogo_filtrado.head(n)
 
         recomendaciones = []
         for idx, row in top_pop.iterrows():
@@ -731,13 +762,11 @@ def recomendar_content_endpoint(user_id: int, n: int = 10):
         enriquecer_recomendaciones(recomendaciones)
 
         # Telemetría: Registra evento
-        telemetria.log_recommendations(
-            str(user_id), "TF-IDF (Cold Start Populares)", recomendaciones
-        )
+        telemetria.log_recommendations(str(user_id), nomb_modelo, recomendaciones)
 
         return {
             "recomendaciones": recomendaciones,
-            "modelo": "TF-IDF (Cold Start Populares)",
+            "modelo": nomb_modelo,
         }
 
     # Usuario con historial -> Content-Based por similitud

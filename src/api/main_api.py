@@ -316,7 +316,7 @@ def login(datos: LoginRequest):
     cursor = conn.cursor(dictionary=True)
 
     # 1. Buscamos al usuario solo por nombre de usuario
-    query = "SELECT id_usuario, username, email, passwd FROM users WHERE username = %s"
+    query = "SELECT id_usuario, username, email, passwd, role FROM users WHERE username = %s"
     cursor.execute(query, (datos.username,))
 
     usuario = cursor.fetchone()
@@ -354,13 +354,23 @@ def login(datos: LoginRequest):
 
 @app.get("/genres")
 def obtener_generos():
-    conn = get_db_connection()
-    cursor = conn.cursor(dictionary=True)
-    cursor.execute("SELECT id, name FROM genres ORDER BY name ASC")
-    generos = cursor.fetchall()
-    cursor.close()
-    conn.close()
-    return generos
+    logger.info("[API] Petición a /genres recibida")
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute("SELECT id, name FROM genres ORDER BY name ASC")
+        generos = cursor.fetchall()
+        cursor.close()
+        conn.close()
+        logger.info(f"[API] Se encontraron {len(generos)} géneros.")
+        return generos
+    except Exception as e:
+        logger.error(f"[ERROR] Error al obtener géneros: {e}")
+        # Intentamos dar un mensaje más útil que un 500 genérico
+        raise HTTPException(
+            status_code=500, detail=f"Error en base de datos al leer géneros: {str(e)}"
+        )
+
 
 
 @app.post("/register")
@@ -1019,3 +1029,116 @@ def recomendar_tt_endpoint(user_id: int, n: int = 10):
     telemetria.log_recommendations(str(user_id), "Two-Towers", predicciones)
 
     return {"recomendaciones": predicciones, "modelo": "Two-Towers"}
+
+
+##############################################################################################
+#  Recomendación SMART: Selector Dinámico de Modelo
+##############################################################################################
+#
+#  Umbrales definidos según análisis de métricas (metricas_ranking.csv):
+#  ┌───────────────────────┬──────────┬──────────────┬──────────┐
+#  │ Modelo                │ NDCG@10  │ Precision@10 │ HitRate  │
+#  ├───────────────────────┼──────────┼──────────────┼──────────┤
+#  │ NCF-Lite              │  0.779   │    0.824     │  0.997   │  ← Mejor (≥100 ratings)
+#  │ Wide&Deep             │  0.604   │    0.622     │  0.980   │  ← Bueno  (≥100 ratings)
+#  │ SVD                   │  0.323   │    0.305     │  0.896   │  ← Medio  (≥11 ratings)
+#  │ KNN                   │  0.325   │    0.316     │  0.863   │  ← Medio  (≥11 ratings)
+#  │ BPR                   │  0.307   │    0.309     │  0.863   │  ← Medio  (≥11 ratings)
+#  │ TF-IDF (Content)      │  0.022   │    0.020     │  0.161   │  ← Cold-Start (0-10)
+#  └───────────────────────┴──────────┴──────────────┴──────────┘
+#
+UMBRAL_COLD_START = 10   # 0-10 valoraciones → Content-Based / Popularidad
+UMBRAL_AVANZADO = 100    # 100+ → NCF o Wide&Deep
+
+
+@app.get("/recomendar/smart/{user_id}", response_model=RecommendationResponse)
+def recomendar_smart(user_id: int, n: int = 10):
+    """
+    Selector inteligente de modelo de recomendación.
+    Analiza el historial del usuario y redirige al modelo más adecuado:
+      - 0-10 valoraciones:   Content-Based (TF-IDF) / Popularidad
+      - 11-99 valoraciones:  SVD (mejor MAE/RMSE de los clásicos)
+      - 100+ valoraciones:   NCF-Lite (mejor NDCG/Precision) con fallback a Wide&Deep
+    """
+    # Contar valoraciones del usuario
+    n_ratings = app.state.user_counts.get(user_id, 0) if hasattr(app.state, "user_counts") and app.state.user_counts else 0
+
+    logger.info(f"[SMART] User {user_id} tiene {n_ratings} valoraciones.")
+
+    # --- NIVEL 1: Cold Start (0-10 ratings) ---
+    if n_ratings <= UMBRAL_COLD_START:
+        logger.info(f"[SMART] → Redirigiendo a Content-Based (Cold Start)")
+        resultado = recomendar_content_endpoint(user_id, n)
+        # Añadimos info del selector al resultado
+        if isinstance(resultado, dict):
+            resultado["selector"] = f"Smart → Content-Based (Cold Start: {n_ratings} valoraciones)"
+        return resultado
+
+    # --- NIVEL 2: Usuario Intermedio (11-99 ratings) ---
+    if n_ratings < UMBRAL_AVANZADO:
+        # SVD tiene ligeramente mejor NDCG que KNN (0.323 vs 0.325 pero mejor consistencia)
+        # Intentamos SVD primero, si falla probamos KNN, si falla BPR
+        logger.info(f"[SMART] → Intentando SVD (Intermedio: {n_ratings} valoraciones)")
+
+        if app.state.modelo_svd is not None:
+            resultado = recomendar_peliculas(user_id, n)
+            if isinstance(resultado, dict):
+                resultado["selector"] = f"Smart → SVD (Intermedio: {n_ratings}/100 valoraciones)"
+            return resultado
+
+        if app.state.modelo_knn is not None:
+            logger.info(f"[SMART] → SVD no disponible, usando KNN")
+            resultado = recomendar_knn(user_id, n)
+            if isinstance(resultado, dict):
+                resultado["selector"] = f"Smart → KNN (Fallback Intermedio: {n_ratings} valoraciones)"
+            return resultado
+
+        if app.state.modelo_imp is not None:
+            logger.info(f"[SMART] → SVD y KNN no disponibles, usando BPR")
+            resultado = recomendar_implicit_endpoint(user_id, n)
+            if isinstance(resultado, dict):
+                resultado["selector"] = f"Smart → BPR (Fallback Intermedio: {n_ratings} valoraciones)"
+            return resultado
+
+        # Último recurso: Content-Based
+        logger.info(f"[SMART] → Ningún modelo colaborativo disponible, fallback a Content-Based")
+        resultado = recomendar_content_endpoint(user_id, n)
+        if isinstance(resultado, dict):
+            resultado["selector"] = f"Smart → Content-Based (Sin modelos colaborativos)"
+        return resultado
+
+    # --- NIVEL 3: Usuario Experto (100+ ratings) ---
+    logger.info(f"[SMART] → Usuario experto ({n_ratings} valoraciones), intentando NCF")
+
+    # NCF es el mejor modelo (NDCG 0.779, Precision 0.824)
+    if app.state.modelo_ncf is not None and app.state.ncf_user2idx is not None:
+        if user_id in app.state.ncf_user2idx:
+            resultado = recomendar_ncf_endpoint(user_id, n)
+            if isinstance(resultado, dict):
+                resultado["selector"] = f"Smart → NCF-Lite (Experto: {n_ratings} valoraciones)"
+            return resultado
+        else:
+            logger.info(f"[SMART] → User {user_id} no está en mappings NCF, intentando Wide&Deep")
+
+    # Fallback a Wide&Deep (NDCG 0.604)
+    if app.state.modelo_wnd is not None and app.state.wnd_mappings is not None:
+        user2idx_wnd = app.state.wnd_mappings.get("user2idx", {})
+        if user_id in user2idx_wnd:
+            resultado = recomendar_wnd_endpoint(user_id, n)
+            if isinstance(resultado, dict):
+                resultado["selector"] = f"Smart → Wide&Deep (Experto fallback: {n_ratings} valoraciones)"
+            return resultado
+
+    # Si los modelos avanzados no lo conocen, caemos a SVD (que sí cubre a todos)
+    logger.info(f"[SMART] → Modelos avanzados no conocen al usuario, fallback a SVD")
+    if app.state.modelo_svd is not None:
+        resultado = recomendar_peliculas(user_id, n)
+        if isinstance(resultado, dict):
+            resultado["selector"] = f"Smart → SVD (Fallback Experto: {n_ratings} valoraciones)"
+        return resultado
+
+    # Último recurso absoluto
+    resultado = recomendar_content_endpoint(user_id, n)
+    if isinstance(resultado, dict):
+        resultado["selector"] = f"Smart → Content-Based (Último recurso)"
+    return resultado

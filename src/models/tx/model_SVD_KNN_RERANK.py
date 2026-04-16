@@ -10,6 +10,12 @@ from sklearn.model_selection import train_test_split
 from sklearn.neighbors import NearestNeighbors
 from sklearn.preprocessing import LabelEncoder
 
+import sys
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..")))
+
+# Tracking centralizado de métricas (historial_metricas.csv)
+from src.utils.registrar_metricas import registrar_metricas
+
 
 # Rutas de datos
 DATA_READY_RATINGS = "src/data/ready/ratings_finales_ia.csv"
@@ -490,4 +496,22 @@ if __name__ == "__main__":
         verbose=True,
     )
     print("Métricas (muestra):", metrics)
+
+    # Registro centralizado en historial_metricas.csv
+    registrar_metricas(
+        modelo="SVD+KNN+Rerank Simple (TX)",
+        hiperparams={
+            "min_ratings": 30,
+            "latent_dim": 50,
+            "knn_neighbors_fit": 80,
+        },
+        metricas={
+            "RMSE": metrics.get("RMSE", 0.0),
+            "MAE": metrics.get("MAE", 0.0),
+            "Precision_10": metrics.get("Precision@10", 0.0),
+            "NDCG_10": metrics.get("NDCG@10", 0.0),
+        },
+        dataset_size=len(recommender.df),
+        notas="Evaluación muestreo 500 usuarios, test_size=0.2",
+    )
 

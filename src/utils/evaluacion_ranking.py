@@ -15,21 +15,23 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..",
 RUTA_CATALOGO = "src/data/ready/dataset_final_movies.csv"
 RUTA_RATINGS = "src/data/ready/ratings_finales_ia.csv"
 
-# Modelos
-RUTA_SVD = "src/models/jj/modelo_1_SVD.pkl"
-RUTA_KNN = "src/models/jj/modelo_2.5_knn_msd.pkl"
-RUTA_WND_ONNX = "src/models/jj/modelo_3_wnd.onnx"
-RUTA_WND_MAP = "src/models/jj/wnd_mappings.pkl"
-RUTA_TFIDF_MOD = "src/models/jj/modelo_4_tfidf.pkl"
-RUTA_TFIDF_MAT = "src/models/jj/modelo_4_matriz.pkl"
-RUTA_TFIDF_IDX = "src/models/jj/modelo_4_indices.pkl"
-RUTA_IMP_MOD = "src/models/jj/modelo_5_implicit.pkl"
-RUTA_IMP_DAT = "src/models/jj/modelo_5_implicit_dataset.pkl"
-RUTA_NCF_ONNX = "src/models/jj/modelo_6_ncf.onnx"
-RUTA_NCF_USER2IDX = "src/models/jj/ncf_user2idx.json"
-RUTA_NCF_ITEM2IDX = "src/models/jj/ncf_item2idx.json"
-RUTA_TT_ONNX = "src/models/jj/modelo_7_twotowers.onnx"
-RUTA_TT_MAP = "src/models/jj/twotowers_mappings.pkl"
+# Pesos de modelos clásicos (guardados en artifacts/weights/)
+RUTA_SVD = "artifacts/weights/modelo_1_SVD.pkl"
+RUTA_KNN = "artifacts/weights/modelo_2.5_knn_msd.pkl"
+RUTA_TFIDF_MOD = "artifacts/weights/modelo_4_tfidf.pkl"
+RUTA_TFIDF_MAT = "artifacts/weights/modelo_4_matriz.pkl"
+RUTA_TFIDF_IDX = "artifacts/weights/modelo_4_indices.pkl"
+RUTA_IMP_MOD = "artifacts/weights/modelo_5_implicit.pkl"
+RUTA_IMP_DAT = "artifacts/weights/modelo_5_implicit_dataset.pkl"
+# Modelos exportados a ONNX (guardados en artifacts/exports/)
+RUTA_WND_ONNX = "artifacts/exports/modelo_3_wnd_r100.onnx"
+RUTA_NCF_ONNX = "artifacts/exports/modelo_6_ncf.onnx"
+RUTA_TT_ONNX = "artifacts/exports/modelo_7_twotowers_r100.onnx"
+# Mapeos de IDs internos <-> reales (guardados en artifacts/mappings/)
+RUTA_WND_MAP = "artifacts/mappings/wnd_mappings_r100.pkl"
+RUTA_NCF_USER2IDX = "artifacts/mappings/ncf_user2idx.json"
+RUTA_NCF_ITEM2IDX = "artifacts/mappings/ncf_item2idx.json"
+RUTA_TT_MAP = "artifacts/mappings/twotowers_mappings_r100.pkl"
 
 # Guardar Resultados
 RUTA_RESULTADOS = "src/utils/metricas_ranking.csv"
@@ -50,6 +52,7 @@ from src.metrics.recall import RecallAtK
 from src.metrics.hitrate import HitRateAtK
 from src.metrics.ndcg import NDCGAtK
 from src.metrics.coverage import CoverageAtK
+from src.metrics.mrr import MRRAtK
 
 
 # ======================================================================================
@@ -301,6 +304,73 @@ def predecir_implicit(modelo, datos, user_id, candidatas):
     return [pelicula[0] for pelicula in predicciones[:K]]
 
 
+# ======================================================================================
+# Predicción para el modelo TX — SVD+KNN+Rerank con géneros
+# ======================================================================================
+
+# Variable global para reutilizar el recommender de tx/ sin reconstruirlo por cada usuario
+_tx_recommender_cache = None
+
+
+def _obtener_tx_recommender():
+    """
+    Construye (o devuelve del caché) el recommender de tx/.
+    Se construye una sola vez y se reutiliza para todos los usuarios evaluados.
+    """
+    global _tx_recommender_cache
+    if _tx_recommender_cache is not None:
+        return _tx_recommender_cache
+
+    try:
+        from src.models.tx.model_SVD_KNN_RERANK_con_generos import build_recommender
+        print("  Construyendo recommender tx/SVD+KNN+Rerank (con géneros)...")
+        _tx_recommender_cache = build_recommender(
+            force_reprocess=False,
+            force_svd_train=False,
+            force_knn_train=False,
+            force_catalog_features_rebuild=False,
+            min_ratings=30,
+            latent_dim=50,
+            knn_neighbors_fit=80,
+        )
+        print("  Recommender tx/ construido correctamente.")
+        return _tx_recommender_cache
+    except Exception as e:
+        print(f"  [ERROR] No se pudo construir el recommender tx/: {e}")
+        return None
+
+
+def predecir_tx_rerank(id_usuario, candidatas):
+    """
+    Genera predicciones Top-K usando el modelo tx/SVD+KNN+Rerank con géneros.
+    A diferencia de los modelos de jj/ (que predicen peli a peli), el de tx/
+    genera un ranking completo internamente, así que solo filtramos por candidatas.
+    """
+    recommender = _obtener_tx_recommender()
+    if recommender is None:
+        return []
+
+    try:
+        # El recommender devuelve [{"tmdb_id": ..., "titulo": ..., "score": ...}]
+        recomendaciones = recommender.recommend(
+            raw_user_id=id_usuario,
+            top_n=K,
+            n_neighbors=50,
+            n_candidates=500,
+            rerank_alpha=0.7,
+            genre_weight=0.7,
+        )
+        # Filtramos para quedarnos solo con las que están en las candidatas
+        ids_candidatas = set(candidatas)
+        resultados_filtrados = [
+            int(r["tmdb_id"]) for r in recomendaciones
+            if int(r["tmdb_id"]) in ids_candidatas
+        ]
+        return resultados_filtrados[:K]
+    except Exception:
+        return []
+
+
 # ---- EVALUACIÓN ----
 
 
@@ -344,6 +414,9 @@ def evaluar():
         CoverageAtK(
             catalog_size=tamano_del_catalogo
         ),  # ¿Se arriesga con distintas opciones o siempre recomienda Marvel?
+        MRRAtK(
+            user_col="userId", item_col="tmdb_id"
+        ),  # ¿En qué posición aparece el primer acierto?
     ]
     pipeline_juez = EvaluationPipeline(metrics=mis_metricas)
 
@@ -364,9 +437,10 @@ def evaluar():
     lista_respuestas_examen = []
 
     # Aquí guardaremos lo que responde la IA en el examen. Un diccionario por cada inteligencia.
+    # Incluimos TX_RERANK para evaluar el modelo híbrido de tx/ junto a los demás
     respuestas_de_la_ia = {
         m: {}
-        for m in ["SVD", "KNN", "WND_ONNX", "TFIDF_MAT", "IMP", "NCF_ONNX", "TT_ONNX"]
+        for m in ["SVD", "KNN", "WND_ONNX", "TFIDF_MAT", "IMP", "NCF_ONNX", "TT_ONNX", "TX_RERANK"]
     }
 
     print(
@@ -469,6 +543,11 @@ def evaluar():
                     peliculas_candidatas_para_recomendar,
                 )
 
+            # D) Modelo TX: SVD+KNN+Rerank con géneros (siempre disponible, no depende de .pkl)
+            recomendaciones_tx = predecir_tx_rerank(id_usuario, peliculas_candidatas_para_recomendar)
+            if recomendaciones_tx:
+                respuestas_de_la_ia["TX_RERANK"][id_usuario] = recomendaciones_tx
+
         except Exception as error_escondido:
             # Si falla un usuario, pasamos silenciosamente al siguiente
             continue
@@ -490,6 +569,7 @@ def evaluar():
         "IMP": "Filtrado Implícito (BPR)",
         "NCF_ONNX": "Red Neuronal NCF-Lite",
         "TT_ONNX": "Two-Towers Bi-Encoder",
+        "TX_RERANK": "SVD+KNN Híbrido con Géneros (TX)",
     }
 
     # Le damos a revisar al Tribunal modelo por modelo
@@ -502,6 +582,14 @@ def evaluar():
         # Le decimos al sistema central: "Evalúa este modelo dadas sus respuestas y las correctas"
         pipeline_juez.evaluate_model(
             nombre_bonito, predicciones_modelo, mega_examen_oficial, k=K
+        )
+
+        # Registramos automáticamente estos resultados en el CSV centralizado
+        # para que no se pierdan y queden en el historial de experimentos
+        pipeline_juez.registrar_resultados_en_csv(
+            nombre_modelo=nombre_bonito,
+            tamano_dataset=len(df_interacciones),
+            notas=f"Evaluación ranking K={K}, {len(usuarios_test)} usuarios test",
         )
 
     # El tribunal escupe el tablero de puntuaciones limpio

@@ -36,6 +36,9 @@ from typing import Dict, List, Tuple
 import numpy as np
 import pandas as pd
 import torch
+
+# Tracking centralizado de métricas (historial_metricas.csv)
+from src.utils.registrar_metricas import registrar_metricas
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader, Dataset
@@ -68,9 +71,10 @@ except ImportError:
 # ---------------------------------------------------------------------------
 _MODELS_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_PATH: str = os.path.join(_MODELS_DIR, "..", "data", "ready", "ratings_finales_ia.csv")
-ONNX_PATH: str = os.path.join(_MODELS_DIR, "ncf_model.onnx")
-USER2IDX_PATH: str = os.path.join(_MODELS_DIR, "user2idx.json")
-ITEM2IDX_PATH: str = os.path.join(_MODELS_DIR, "item2idx.json")
+# Los artefactos entrenados se guardan centralizados en artifacts/
+ONNX_PATH: str = "artifacts/exports/nil_ncf_model.onnx"
+USER2IDX_PATH: str = "artifacts/mappings/nil_ncf_user2idx.json"
+ITEM2IDX_PATH: str = "artifacts/mappings/nil_ncf_item2idx.json"
 
 # Hiperparametros por defecto
 MIN_USER_RATINGS: int = 200   # Umbral K-Core para usuarios
@@ -618,6 +622,25 @@ def main() -> None:
         args.onnx_path,
         args.user2idx_path,
         args.item2idx_path,
+    )
+
+    # ------------------------------------------------------------------
+    # 6. Registro centralizado de métricas en historial_metricas.csv
+    # ------------------------------------------------------------------
+    registrar_metricas(
+        modelo="NCF-Lite (nil)",
+        hiperparams={
+            "emb_dim": args.emb_dim,
+            "batch_size": args.batch_size,
+            "epochs": args.epochs,
+            "lr": args.lr,
+            "min_user_ratings": args.min_user_ratings,
+            "min_item_ratings": args.min_item_ratings,
+        },
+        metricas={},  # Las métricas de ranking se calculan aparte en evaluación
+        dataset_size=len(train_loader.dataset),
+        train_time_s=round(t_total, 1),
+        notas="Entrenamiento NCF-Lite (pipeline nil)",
     )
 
 

@@ -39,9 +39,9 @@ RUTA_CATALOGO = "src/data/ready/dataset_final_movies.csv"
 RUTA_RATINGS = "src/data/ready/ratings_finales_ia.csv"
 
 # Destinos guardados
-RUTA_MODELO_TFIDF = "src/models/jj/modelo_4_tfidf.pkl"
-RUTA_MATRIZ_TFIDF = "src/models/jj/modelo_4_matriz.pkl"
-RUTA_MAPPING_IDX = "src/models/jj/modelo_4_indices.pkl"
+RUTA_MODELO_TFIDF = "artifacts/weights/modelo_4_tfidf.pkl"
+RUTA_MATRIZ_TFIDF = "artifacts/weights/modelo_4_matriz.pkl"
+RUTA_MAPPING_IDX = "artifacts/weights/modelo_4_indices.pkl"
 
 ############################################################################################
 

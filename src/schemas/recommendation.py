@@ -37,3 +37,4 @@ class RecommendationResponse(BaseModel):
     modelo: str
     mensaje: Optional[str] = None
     insufficient_data: Optional[bool] = None
+    selector: Optional[str] = None  # Info del selector dinámico Smart

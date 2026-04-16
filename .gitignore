@@ -226,11 +226,12 @@ src/data/ready/*.csv
 # Guardar credenciales de acceso
 .env
 
-# Modelos entrenados (pesan demasiado para GitHub, se regeneran con los scripts)
+# Modelos entrenados (pesan demasiado para GitHub, se descargan de HuggingFace automáticamente)
 *.pkl
 *.pth
 *.joblib
 *.onnx
+*.onnx.data
 
 # Acciones de maquina para verificar
 machine_check/

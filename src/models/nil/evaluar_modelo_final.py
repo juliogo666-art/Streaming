@@ -39,6 +39,9 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader, Dataset
 
+# Tracking centralizado de métricas (historial_metricas.csv)
+from src.utils.registrar_metricas import registrar_metricas
+
 # ---------------------------------------------------------------------------
 # Logger  — nivel WARNING para silenciar INFO durante la evaluacion limpia
 # ---------------------------------------------------------------------------
@@ -536,6 +539,28 @@ def main() -> None:
 
     # 7. Tabla de resultados — sin guardar archivos
     imprimir_tabla(resultados)
+
+    # 8. Registro centralizado en historial_metricas.csv
+    registrar_metricas(
+        modelo="NCF-Lite (nil-eval)",
+        hiperparams={
+            "k_core": args.k_core,
+            "emb_dim": args.emb_dim,
+            "epochs": args.epochs,
+            "batch_size": args.batch_size,
+            "lr": args.lr,
+            "neg_samples": args.neg_samples,
+            "topk": args.topk,
+        },
+        metricas={
+            "RMSE": resultados.rmse,
+            "MAE": resultados.mae,
+            "NDCG_10": resultados.ndcg_at_k,
+            "Precision_10": resultados.precision_at_k,
+        },
+        dataset_size=len(df),
+        notas=f"Evaluación LOO K-Core={args.k_core}, {min(args.max_users, n_users)} usuarios",
+    )
 
 
 if __name__ == "__main__":

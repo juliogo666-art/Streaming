@@ -13,20 +13,21 @@ import pickle
 import joblib
 import torch
 
-# --- Rutas Originales ---
-RUTA_WND_PTH = "src/models/jj/modelo_3_wnd.pth"
-RUTA_WND_MAP = "src/models/jj/wnd_mappings.pkl"
+# --- Rutas de origen (checkpoints PyTorch y mapeos) ---
+RUTA_WND_PTH = "artifacts/checkpoints/modelo_3_wnd.pth"
+RUTA_WND_MAP = "artifacts/mappings/wnd_mappings.pkl"
 
+# Archivos .pkl originales que se migran a .joblib (ahora en artifacts/weights/)
 RUTAS_PICKLE = [
-    "src/models/jj/modelo_1_SVD.pkl",
-    "src/models/jj/modelo_2.5_knn_msd.pkl",
-    "src/models/jj/modelo_4_tfidf.pkl",
-    "src/models/jj/modelo_4_matriz.pkl",
-    "src/models/jj/modelo_4_indices.pkl",
+    "artifacts/weights/modelo_1_SVD.pkl",
+    "artifacts/weights/modelo_2.5_knn_msd.pkl",
+    "artifacts/weights/modelo_4_tfidf.pkl",
+    "artifacts/weights/modelo_4_matriz.pkl",
+    "artifacts/weights/modelo_4_indices.pkl",
 ]
 
-# --- Rutas Destino ---
-RUTA_WND_ONNX = "src/models/jj/modelo_3_wnd.onnx"
+# --- Ruta destino para la exportación ONNX ---
+RUTA_WND_ONNX = "artifacts/exports/modelo_3_wnd.onnx"
 
 print("=" * 60)
 print("  Iniciando Exportación y Optimización de Modelos")

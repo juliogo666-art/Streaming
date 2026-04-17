@@ -1171,3 +1171,79 @@ def recomendar_smart(user_id: int, n: int = 10):
     if isinstance(resultado, dict):
         resultado["selector"] = f"Smart → Content-Based (Último recurso)"
     return resultado
+
+
+##############################################################################################
+#  Tragaperras de Serendipia
+##############################################################################################
+
+
+@app.get("/api/serendipia/{user_id}")
+def tragaperras_serendipia(user_id: int):
+    """Devuelve 3 películas 'joya oculta' seleccionadas con muestreo ponderado
+    por serendipity_score, personalizado con los 2 géneros favoritos del usuario.
+    Toda la matemática está pre-calculada en serendipity_cache; este endpoint es puro I/O.
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
+    try:
+        # 1. Obtener los 2 géneros favoritos del usuario
+        cursor.execute(
+            """
+            SELECT g.name AS genre_name
+            FROM user_interests ui
+            INNER JOIN genres g ON ui.genre_id = g.id
+            WHERE ui.id_usuario = %s
+            LIMIT 2
+            """,
+            (user_id,),
+        )
+        filas_generos = cursor.fetchall()
+
+        if not filas_generos:
+            raise HTTPException(
+                status_code=404,
+                detail=f"El usuario {user_id} no tiene géneros favoritos registrados.",
+            )
+
+        generos = [f["genre_name"] for f in filas_generos]
+
+        # 2. Recuperar candidatos pre-calculados de la caché (sin matemáticas aquí)
+        placeholders = ", ".join(["%s"] * len(generos))
+        cursor.execute(
+            f"SELECT movie_id, genre, serendipity_score FROM serendipity_cache WHERE genre IN ({placeholders})",
+            tuple(generos),
+        )
+        candidatos = cursor.fetchall()
+
+    finally:
+        cursor.close()
+        conn.close()
+
+    if not candidatos:
+        raise HTTPException(
+            status_code=503,
+            detail="La caché de serendipia está vacía. Ejecuta: python -m src.serendipia.actualizar_cache_cron",
+        )
+
+    # 3. Muestreo ponderado sin reemplazo (Pandas) usando serendipity_score como peso
+    df = pd.DataFrame(candidatos)
+    n = min(3, len(df))
+    ganadores = df.sample(n=n, weights="serendipity_score", replace=False)
+
+    recomendaciones = [
+        {
+            "movie_id": int(row.movie_id),
+            "genre": str(row.genre),
+            "serendipity_score": round(float(row.serendipity_score), 8),
+        }
+        for row in ganadores.itertuples(index=False)
+    ]
+
+    logger.info(f"[Serendipia] User {user_id} | Géneros: {generos} | Ganadores: {[r['movie_id'] for r in recomendaciones]}")
+
+    return {
+        "user_id": user_id,
+        "generos_favoritos": generos,
+        "recomendaciones": recomendaciones,
+    }

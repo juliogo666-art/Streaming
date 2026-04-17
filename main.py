@@ -52,12 +52,15 @@ def main():
 
     # 1. Lanzar el Backend (FastAPI)
     backend = subprocess.Popen(
-        [sys.executable, "-m", "uvicorn", "src.api.main_api:app", "--reload"],
+        [sys.executable, "-m", "uvicorn", "src.api.main_api:app"],
         env=env_config,
     )
 
     # 2. Esperar un par de segundos a que el backend suba
-    time.sleep(2)
+    time.sleep(3)
+    if backend.poll() is not None:
+        print("El backend terminó al arrancar. Revisa el error mostrado en consola.")
+        return
 
     # 3. Lanzar el Frontend (Streamlit)
     frontend = subprocess.Popen(
@@ -87,11 +90,14 @@ def main_debug():
     print("Iniciando Debug de Backend...")
     # Usar el root como base para que los imports relativos de 'src' funcionen
     backend = subprocess.Popen(
-        [sys.executable, "-m", "uvicorn", "src.api.main_api:app", "--reload"],
+        [sys.executable, "-m", "uvicorn", "src.api.main_api:app"],
         env=env_config,
     )
 
-    time.sleep(2)
+    time.sleep(3)
+    if backend.poll() is not None:
+        print("El backend terminó al arrancar. Revisa el error mostrado en consola.")
+        return
 
     print("Iniciando Debug de Frontend...")
     frontend = subprocess.Popen(

@@ -1,7 +1,13 @@
 import csv
 import json
 import ast
+import os
+import sys
 from mysql.connector import Error
+
+# Rutas CSV del mismo flujo que POST /importar_datos en main_api.py
+RUTA_CSV_SERIES = "src/data/clean/tmdb_shows_limpio.csv"
+RUTA_CSV_PELICULAS = "src/data/clean/tmdb_movies_limpio.csv"
 
 
 def normalizar_datos(fila, tipo):
@@ -168,3 +174,46 @@ def limpiar_tablas_contenido(conexion):
         print(f"Error al limpiar las tablas: {e}")
     finally:
         cursor.close()
+
+
+def importar_datos_catalogo(conexion) -> None:
+    """
+    Mismo flujo que el endpoint POST /importar_datos:
+    1) TRUNCATE de content_genres y contents
+    2) Importación de series (tv) desde CSV limpio
+    3) Importación de películas (movie) desde CSV limpio
+
+    Rellena content_genres vía ejecutar_importacion (INSERT por género de cada fila).
+    """
+    limpiar_tablas_contenido(conexion)
+    print("inicio importacion series")
+    ejecutar_importacion(conexion, RUTA_CSV_SERIES, "tv")
+    print("fin importacion series")
+    print("inicio importacion peliculas, se viene lo chungo")
+    ejecutar_importacion(conexion, RUTA_CSV_PELICULAS, "movie")
+    print("fin importacion peliculas, al fin!")
+
+
+if __name__ == "__main__":
+    """
+    Ejecución desde consola (raíz del repo recomendada):
+      uv run python src/api/etl.py
+
+    Equivale al flujo de POST /importar_datos (limpieza + series + películas).
+    """
+    _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    if _ROOT not in sys.path:
+        sys.path.insert(0, _ROOT)
+    os.chdir(_ROOT)
+
+    from src.api.database import get_db_connection  # noqa: E402
+
+    _conn = get_db_connection()
+    try:
+        importar_datos_catalogo(_conn)
+        print("Importación completada.")
+    except Exception as exc:
+        print(f"Error: {exc}")
+        sys.exit(1)
+    finally:
+        _conn.close()

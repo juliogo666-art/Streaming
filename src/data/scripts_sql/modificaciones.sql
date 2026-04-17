@@ -21,3 +21,17 @@ JOIN (
 ) r ON u.id_usuario = r.id_usuario
 SET u.id_usuario = r.id_reasignado
 where u.id_usuario > 0;
+
+#añadir origen de interés para distinguir selección manual vs inferencia ML
+ALTER TABLE user_interests
+ADD COLUMN source VARCHAR(20) NOT NULL DEFAULT 'user_selected' AFTER genre_id;
+
+#backfill de intereses ya existentes:
+#- usuarios importados desde MovieLens (id < 500000) => ml_inferred
+#- usuarios de registro propio (id >= 500000)       => user_selected
+UPDATE user_interests ui
+JOIN users u ON u.id_usuario = ui.id_usuario
+SET ui.source = CASE
+    WHEN u.id_usuario < 500000 THEN 'ml_inferred'
+    ELSE 'user_selected'
+END;

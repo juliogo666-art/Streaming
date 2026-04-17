@@ -29,6 +29,7 @@ except ImportError as e:
     ONNX_DISPONIBLE = False
 
 # --- Configuración de Logging Estructurado ---
+os.makedirs("logs", exist_ok=True)
 log_handler = logging.FileHandler("logs/backend.log", encoding="utf-8")
 log_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
 logger = logging.getLogger("streaming_api")
@@ -314,42 +315,59 @@ def importar_datos():
 def login(datos: LoginRequest):
     conn = get_db_connection()
     cursor = conn.cursor(dictionary=True)
+    try:
+        # 1. Buscamos al usuario solo por nombre de usuario
+        query = "SELECT id_usuario, username, email, passwd, role FROM users WHERE username = %s"
+        cursor.execute(query, (datos.username,))
+        usuario = cursor.fetchone()
 
-    # 1. Buscamos al usuario solo por nombre de usuario
-    query = "SELECT id_usuario, username, email, passwd, role FROM users WHERE username = %s"
-    cursor.execute(query, (datos.username,))
+        if usuario:
+            # Obtenemos el hash que estaba guardado en BD
+            hash_guardado = usuario["passwd"]
 
-    usuario = cursor.fetchone()
+            # 2. Comprobamos si la contraseña coincide (Soportando tanto Hash nuevo como Texto Plano antiguo)
+            es_valido = False
+            if hash_guardado.startswith("$2b$") or hash_guardado.startswith("$2a$"):
+                # Si es un hash de bcrypt válido
+                es_valido = bcrypt.checkpw(
+                    datos.password.encode("utf-8"), hash_guardado.encode("utf-8")
+                )
+            else:
+                # Si es una contraseña antigua en texto plano (ej: 'root')
+                es_valido = datos.password == hash_guardado
 
-    cursor.close()
-    conn.close()
+            if es_valido:
+                # Si el usuario tiene intereses inferidos por ML, devolvemos top-3 gustos.
+                # Esto permite al frontend mostrarlos de forma contextual tras el login.
+                cursor.execute(
+                    """
+                    SELECT g.id, g.name
+                    FROM user_interests ui
+                    JOIN genres g ON g.id = ui.genre_id
+                    WHERE ui.id_usuario = %s
+                      AND ui.source = 'ml_inferred'
+                    ORDER BY g.name ASC
+                    LIMIT 3
+                    """,
+                    (usuario["id_usuario"],),
+                )
+                gustos_ml = cursor.fetchall()
+                if gustos_ml:
+                    usuario["gustos_top3"] = [row["name"] for row in gustos_ml]
+                    usuario["gustos_source"] = "ml_inferred"
 
-    if usuario:
-        # Obtenemos el hash que estaba guardado en BD
-        hash_guardado = usuario["passwd"]
+                # Por seguridad, borramos la contraseña del diccionario temporal antes de mandarlo al frontend
+                del usuario["passwd"]
+                return {"status": "success", "message": "Login exitoso", "user": usuario}
 
-        # 2. Comprobamos si la contraseña coincide (Soportando tanto Hash nuevo como Texto Plano antiguo)
-        es_valido = False
-        if hash_guardado.startswith("$2b$") or hash_guardado.startswith("$2a$"):
-            # Si es un hash de bcrypt válido
-            es_valido = bcrypt.checkpw(
-                datos.password.encode("utf-8"), hash_guardado.encode("utf-8")
-            )
-        else:
-            # Si es una contraseña antigua en texto plano (ej: 'root')
-            es_valido = datos.password == hash_guardado
-
-        if es_valido:
-            # Por seguridad, borramos la contraseña del diccionario temporal antes de mandarlo al frontend
-            del usuario["passwd"]
-
-            return {"status": "success", "message": "Login exitoso", "user": usuario}
-        else:
             raise HTTPException(
                 status_code=401, detail="Usuario o contraseña incorrectos"
             )
-    else:
+
         raise HTTPException(status_code=401, detail="Usuario o contraseña incorrectos")
+    finally:
+        cursor.close()
+        conn.close()
 
 
 @app.get("/genres")

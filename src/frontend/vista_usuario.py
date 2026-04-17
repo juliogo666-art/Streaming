@@ -49,6 +49,12 @@ def render():
         """
         st.markdown(html_identidad, unsafe_allow_html=True)
 
+        gustos_top3 = usuario.get("gustos_top3", [])
+        gustos_source = usuario.get("gustos_source")
+        if gustos_source == "ml_inferred" and gustos_top3:
+            gustos_texto = " · ".join(gustos_top3[:3])
+            st.caption(f"Tus gustos detectados (ML): {gustos_texto}")
+
     with col_logout:
         st.write("")  # Espaciado para alinear verticalmente el botón
         if st.button("Cerrar Sesión", key="btn_logout_usuario"):

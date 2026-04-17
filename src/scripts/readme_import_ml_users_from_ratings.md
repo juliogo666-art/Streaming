@@ -96,3 +96,7 @@ Si ya existe un `id_usuario` en `users` pero el **`username` no es** `usuario_<i
 2. Cuenta valoraciones por `userId`; filtra ≥ umbral.
 3. Segunda pasada del CSV: acumula scores de género (rating ≥ 4).
 4. Inserta/actualiza `users` y reescribe `user_interests` por usuario según las reglas anteriores.
+
+## Futuras mejoras
+
+- **`source` en `user_interests`:** la columna ya permite distinguir el origen de los gustos (por ejemplo inferidos desde MovieLens frente a selección manual en la app). Cuando la aplicación **persista en base de datos las valoraciones** de los usuarios reales, se podrá reutilizar la misma idea: derivar o actualizar intereses a partir de esas interacciones y guardarlos con un valor de `source` propio (p. ej. deducidos desde ratings de la app), conviviendo con filas `ml_inferred` o `user_selected` sin mezclar semánticas.

@@ -4,46 +4,42 @@ import os
 def unificar_datos(tipo="movies"):
     print(f"Unificacion para {tipo.upper()}...")
 
-    # Leemos siempre de la carpeta CLEAN para asegurar la calidad de datos
-
     ruta_tmdb = f"src/data/clean/tmdb_{tipo}_limpio.csv"
-    ruta_trakt = f"src/data/clean/trakt_{tipo}_limpio.csv"
 
-    # Creamos la ruta de salida, el directorio "ready"
     os.makedirs("src/data/ready", exist_ok=True)
     ruta_salida = f"src/data/ready/dataset_final_{tipo}.csv"
 
     try:
-        # Cargamos el dataset base que contiene datos exhaustivos de TMDB
         df_base = pd.read_csv(ruta_tmdb)
     except FileNotFoundError:
         print(f"Falta el archivo limpio de TMDB: {ruta_tmdb}")
         return
 
-    try:
-        # Cargamos el dataset de metadatos de tendencias desde Trakt
-        df_trakt = pd.read_csv(ruta_trakt)
-        # LEFT JOIN: Mantenemos todas las filas de TMDB y añadimos info de Trakt
-        df_final = pd.merge(df_base, df_trakt, on='tmdb_id', how='left')
+    df_final = df_base.copy()
 
-        # Imputación post-cruce para manejar valores nulos que surgen del JOIN
-        if 'es_tendencia' in df_final.columns:
-            df_final['es_tendencia'] = df_final['es_tendencia'].fillna(False).infer_objects(copy=False)
-        if 'es_popular' in df_final.columns:
-            df_final['es_popular'] = df_final['es_popular'].fillna(False).infer_objects(copy=False)
-            
-        if 'espectadores_live' in df_final.columns:
-            df_final['espectadores_live'] = df_final['espectadores_live'].fillna(0).astype(int)
-            
-        if 'certificacion' in df_final.columns:
-            df_final['certificacion'] = df_final['certificacion'].fillna('NR')
-            
-    except FileNotFoundError:
-        print(f"No hay archivo Trakt limpio para {tipo}. Creando dataset solo con TMDB.")
-        df_final = df_base
-    # Limpieza de columnas duplicadas post-merge    
-    if 'titulo_x' in df_final.columns:
-        df_final = df_final.rename(columns={'titulo_x': 'titulo'}).drop(columns=['titulo_y'], errors='ignore')
+    # Derivar columnas equivalentes a las que antes venían de Trakt, usando TMDB
+    # nota_media y total_votos ya existen en TMDB como vote_average / vote_count
+    df_final['nota_media'] = df_final['vote_average']
+    df_final['total_votos'] = df_final['vote_count']
+
+    # Extraer año de la fecha de estreno
+    fecha_col = 'fecha_estreno' if 'fecha_estreno' in df_final.columns else 'first_air_date'
+    if fecha_col in df_final.columns:
+        df_final['ano'] = pd.to_datetime(df_final[fecha_col], errors='coerce').dt.year.astype('Int64')
+
+    # Derivar flags de tendencia/popularidad desde el score de popularidad de TMDB
+    if 'popularity' in df_final.columns:
+        df_final['es_tendencia'] = df_final['popularity'] > 20
+        df_final['es_popular'] = df_final['popularity'] > 10
+    else:
+        df_final['es_tendencia'] = False
+        df_final['es_popular'] = False
+
+    # Métricas de streaming sin equivalente en TMDB → valores neutros
+    df_final['certificacion'] = 'NR'
+    df_final['espectadores_live'] = 0
+    df_final['reproducciones_totales'] = 0
+    df_final['es_historico_vistas'] = False
 
     if tipo == "movies":
         try:

@@ -1268,8 +1268,23 @@ def tragaperras_serendipia(user_id: int):
             detail="La caché de serendipia está vacía. Ejecuta: python -m src.serendipia.actualizar_cache_cron",
         )
 
-    # 3. Muestreo ponderado sin reemplazo (Pandas) usando serendipity_score como peso
+    # 3. Excluir películas que el usuario ya ha puntuado
     df = pd.DataFrame(candidatos)
+    df_ratings = getattr(app.state, "df_ratings_ia", None)
+    if df_ratings is not None:
+        ya_puntuadas = set(
+            df_ratings[df_ratings["userId"] == user_id]["tmdb_id"].tolist()
+        )
+        df = df[~df["movie_id"].isin(ya_puntuadas)]
+        logger.info(f"[Serendipia] User {user_id} | Excluidas {len(ya_puntuadas)} pelis ya puntuadas | Candidatas restantes: {len(df)}")
+
+    if df.empty:
+        raise HTTPException(
+            status_code=404,
+            detail=f"El usuario {user_id} ya ha puntuado todas las películas de sus géneros favoritos.",
+        )
+
+    # 4. Muestreo ponderado sin reemplazo (Pandas) usando serendipity_score como peso
     n = min(3, len(df))
     ganadores = df.sample(n=n, weights="serendipity_score", replace=False)
 

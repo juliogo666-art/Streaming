@@ -13,6 +13,7 @@ Uso:
     uv run pytest test/test_serendipia.py -v
 """
 
+import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
 
@@ -172,6 +173,78 @@ class TestSerendipiaEndpoint:
         """Un user_id sin intereses registrados debe devolver 404."""
         response = client.get("/api/serendipia/999999999")
         assert response.status_code == 404
+
+    def test_no_recomienda_peliculas_ya_puntuadas(self, usuario_con_generos):
+        """Las películas ya puntuadas por el usuario nunca deben aparecer en el resultado."""
+        user_id = usuario_con_generos
+
+        # 1. Hacer una llamada normal para obtener candidatos reales del género
+        data_inicial = client.get(f"/api/serendipia/{user_id}").json()
+        assert data_inicial["recomendaciones"], "No hay recomendaciones con qué probar"
+
+        # 2. Marcar TODOS los movie_ids de la caché del usuario como ya puntuados
+        #    (obtenemos los ids directamente de serendipity_cache para el género)
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT DISTINCT movie_id FROM serendipity_cache WHERE genre IN ('Drama', 'Romance')"
+        )
+        todos_ids = [r[0] for r in cur.fetchall()]
+        cur.close()
+        conn.close()
+
+        # 3. Inyectar un df_ratings_ia falso que dice que el usuario ya puntuó esas películas
+        df_simulado = pd.DataFrame({
+            "userId": [user_id] * len(todos_ids),
+            "tmdb_id": todos_ids,
+        })
+        original_ratings = getattr(app.state, "df_ratings_ia", None)
+        app.state.df_ratings_ia = df_simulado
+
+        try:
+            # 4. El endpoint debe retornar 404 porque no quedan candidatos
+            response = client.get(f"/api/serendipia/{user_id}")
+            assert response.status_code == 404, (
+                f"Se esperaba 404 al tener todas las películas puntuadas, "
+                f"pero se obtuvo {response.status_code}: {response.json()}"
+            )
+        finally:
+            # 5. Restaurar el estado original
+            app.state.df_ratings_ia = original_ratings
+
+    def test_no_recomienda_pelicula_concreta_ya_puntuada(self, usuario_con_generos):
+        """Una película específica ya puntuada no debe aparecer en ninguna ronda."""
+        user_id = usuario_con_generos
+
+        # Obtener un movie_id real de la caché
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT movie_id FROM serendipity_cache WHERE genre IN ('Drama', 'Romance') "
+            "ORDER BY serendipity_score DESC LIMIT 50"
+        )
+        top_ids = [r[0] for r in cur.fetchall()]
+        cur.close()
+        conn.close()
+
+        # Simular que el usuario ya puntuó los top-50 (alta probabilidad de colisión sin el filtro)
+        df_simulado = pd.DataFrame({
+            "userId": [user_id] * len(top_ids),
+            "tmdb_id": top_ids,
+        })
+        original_ratings = getattr(app.state, "df_ratings_ia", None)
+        app.state.df_ratings_ia = df_simulado
+
+        try:
+            for _ in range(5):
+                data = client.get(f"/api/serendipia/{user_id}").json()
+                devueltos = {r["movie_id"] for r in data.get("recomendaciones", [])}
+                colision = devueltos & set(top_ids)
+                assert not colision, (
+                    f"Se recomendaron películas ya puntuadas: {colision}"
+                )
+        finally:
+            app.state.df_ratings_ia = original_ratings
 
 
 class TestGeneroMapeo:

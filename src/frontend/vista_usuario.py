@@ -34,6 +34,12 @@ def render():
 
     with col_info:
         # Etiqueta visual para identificar rápidamente quién está usando la aplicación
+        gustos_top3 = usuario.get("gustos_top3", [])
+        gustos_source = usuario.get("gustos_source")
+        gustos_texto = ""
+        if gustos_source == "ml_inferred" and gustos_top3:
+            gustos_texto = " · ".join(gustos_top3[:4])
+            # st.caption(f"Tus gustos detectados (ML): {gustos_texto}")
         html_identidad = f"""
             <div style="
                 background: rgba(0,31,63,0.6);
@@ -43,17 +49,12 @@ def render():
                 margin-top: 18px;
                 text-align: center;
             ">
-                <span style="color:#B8860B; font-weight:600; font-size:2.1rem;">{nombre_mostrar}</span>
-                <span style="color:#aaa; font-size:1.1rem;"> · ID: {id_usuario}</span>
+                <span style="color:#B8860B; font-weight:1200; font-size:1.8rem;">{nombre_mostrar}</span>
+                <span style="color:#aaa; font-size:1.2rem;"> · ID: {id_usuario}</span></br>
+                <span style="color:#aaa; font-size:1.2rem;"> · Tus gustos detectados (ML): {gustos_texto}</span>
             </div>
         """
         st.markdown(html_identidad, unsafe_allow_html=True)
-
-        gustos_top3 = usuario.get("gustos_top3", [])
-        gustos_source = usuario.get("gustos_source")
-        if gustos_source == "ml_inferred" and gustos_top3:
-            gustos_texto = " · ".join(gustos_top3[:3])
-            st.caption(f"Tus gustos detectados (ML): {gustos_texto}")
 
     with col_logout:
         st.write("")  # Espaciado para alinear verticalmente el botón

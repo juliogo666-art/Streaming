@@ -20,3 +20,11 @@ class RegisterRequest(BaseModel):
     fecha_nacimiento: str = None
     sexo: str = None
     intereses: list[int] = []
+
+
+class RatingRequest(BaseModel):
+    """Esquema para la petición de valoración de una película por un usuario."""
+    user_id: int
+    tmdb_id: int
+    rating: float  # 0.5 a 5.0 en pasos de 0.5
+

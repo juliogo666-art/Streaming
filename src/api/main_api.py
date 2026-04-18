@@ -1191,9 +1191,31 @@ def recomendar_smart(user_id: int, n: int = 10):
     return resultado
 
 
-##############################################################################################
-#  Tragaperras de Serendipia
-##############################################################################################
+#  Serendipia
+
+
+# Mapeo de nombres de género español (tabla `genres`) → inglés (tabla `serendipity_cache`)
+_GENRE_ES_TO_EN: dict[str, str] = {
+    "Acción": "Action",
+    "Aventura": "Adventure",
+    "Animación": "Animation",
+    "Comedia": "Comedy",
+    "Crimen": "Crime",
+    "Documental": "Documentary",
+    "Drama": "Drama",
+    "Familia": "Family",
+    "Fantasía": "Fantasy",
+    "Historia": "History",
+    "Terror": "Horror",
+    "Música": "Music",
+    "Misterio": "Mystery",
+    "Romance": "Romance",
+    "Ciencia ficción": "Science Fiction",
+    "Película de TV": "TV Movie",
+    "Suspense": "Thriller",
+    "Bélica": "War",
+    "Western": "Western",
+}
 
 
 @app.get("/api/serendipia/{user_id}")
@@ -1224,7 +1246,9 @@ def tragaperras_serendipia(user_id: int):
                 detail=f"El usuario {user_id} no tiene géneros favoritos registrados.",
             )
 
-        generos = [f["genre_name"] for f in filas_generos]
+        # Traducir nombres español → inglés para consultar serendipity_cache
+        generos_es = [f["genre_name"] for f in filas_generos]
+        generos = [_GENRE_ES_TO_EN.get(g, g) for g in generos_es]
 
         # 2. Recuperar candidatos pre-calculados de la caché (sin matemáticas aquí)
         placeholders = ", ".join(["%s"] * len(generos))
@@ -1258,7 +1282,7 @@ def tragaperras_serendipia(user_id: int):
         for row in ganadores.itertuples(index=False)
     ]
 
-    logger.info(f"[Serendipia] User {user_id} | Géneros: {generos} | Ganadores: {[r['movie_id'] for r in recomendaciones]}")
+    logger.info(f"[Serendipia] User {user_id} | Géneros: {generos_es} → {generos} | Ganadores: {[r['movie_id'] for r in recomendaciones]}")
 
     return {
         "user_id": user_id,

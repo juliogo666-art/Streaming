@@ -220,6 +220,4 @@ if __name__ == "__main__":
     # Ejecuta el flujo cuando el script se inicia directamente
     limpiar_catalogo_puro("shows")
     limpiar_catalogo_puro("movies")
-    limpiar_tendencias_trakt("shows")
-    limpiar_tendencias_trakt("movies")
     limpiar_movielens()

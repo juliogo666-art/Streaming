@@ -33,7 +33,14 @@ from src.serendipia.calculadora_serendipia import (
     calcular_serendipity,
     top_por_genero,
 )
-from src.api.database import get_db_connection
+try:
+    from src.api.database import get_db_connection
+except ModuleNotFoundError:
+    # Fallback cuando el script se ejecuta directamente (no como módulo).
+    # Añadimos la raíz del proyecto al Python path para permitir imports absolutos "src.*".
+    project_root = Path(__file__).resolve().parents[2]
+    sys.path.insert(0, str(project_root))
+    from src.api.database import get_db_connection
 
 # ---------------------------------------------------------------------------
 # Logging — salida a consola + fichero de log
@@ -92,6 +99,38 @@ def _cargar_y_preparar_csv(csv_path: Path) -> pd.DataFrame:
         .dropna()
         .copy()
     )
+
+    # Filtrado por género con umbral adaptativo:
+    #   - Se aplica MIN_VOTES=10 como umbral global de votos mínimos.
+    #   - Si un género no alcanza GENRE_MIN_MOVIES películas tras el filtro,
+    #     se relaja el umbral para ese género hasta incluir las
+    #     GENRE_MIN_MOVIES películas con más votos disponibles.
+    # Esto garantiza cobertura de todos los géneros TMDB sin sacrificar
+    # la calidad estadística en géneros grandes.
+    MIN_VOTES: int = 10
+    GENRE_MIN_MOVIES: int = 10
+
+    # Excluir siempre películas sin rating real
+    df = df[df["rating_mean"] > 0].copy()
+
+    partes: list[pd.DataFrame] = []
+    for genre, grupo in df.groupby("genre"):
+        candidatos = grupo[grupo["vote_count"] >= MIN_VOTES]
+        if len(candidatos) < GENRE_MIN_MOVIES:
+            # Relajar umbral: tomar las GENRE_MIN_MOVIES con más votos
+            candidatos = grupo.nlargest(GENRE_MIN_MOVIES, "vote_count")
+            logger.warning(
+                "Género '%s': solo %d películas con vote_count>=%d. "
+                "Usando top-%d por votos (mín votos real: %d).",
+                genre,
+                len(grupo[grupo["vote_count"] >= MIN_VOTES]),
+                MIN_VOTES,
+                GENRE_MIN_MOVIES,
+                int(candidatos["vote_count"].min()),
+            )
+        partes.append(candidatos)
+
+    df = pd.concat(partes, ignore_index=True)
     logger.info("CSV preparado: %d filas (película × género).", len(df))
     return df
 

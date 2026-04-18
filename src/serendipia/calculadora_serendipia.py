@@ -116,7 +116,18 @@ def calcular_serendipity(df: pd.DataFrame) -> pd.DataFrame:
     df["weighted_rating"] = (v * R + M * C) / (v + M)
 
     # Serendipity Score = WR / log10(v + 10)
-    df["serendipity_score"] = df["weighted_rating"] / (v + 10).apply(math.log10)
+    raw_score = df["weighted_rating"] / (v + 10).apply(math.log10)
+
+    # Normalización min-max por género para maximizar la diferenciación entre
+    # películas al usar weighted sampling. Sin esto, todos los scores caen en
+    # un rango estrecho (~0.9–5.85) y el muestreo ponderado apenas diferencia.
+    score_min = raw_score.min()
+    score_max = raw_score.max()
+    if score_max > score_min:
+        # Escalar a [0.01, 1.0] — el mínimo 0.01 evita peso cero
+        df["serendipity_score"] = 0.01 + 0.99 * (raw_score - score_min) / (score_max - score_min)
+    else:
+        df["serendipity_score"] = raw_score
 
     return df
 

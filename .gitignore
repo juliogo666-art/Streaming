@@ -218,6 +218,7 @@ src/data/clean/*.csv
 
 src/data/ready/*.csv
 
+doc/
 
 
 

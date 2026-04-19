@@ -1,62 +1,134 @@
-# Plan de Refactorización: Arquitectura MLOps y API
+# Sistema de Valoraciones y Tarjetas Interactivas
 
-Este documento detalla el plan de acción para integrar la nueva estructura de carpetas (`metrics`, `pipelines`, `tracking`, `schemas`, `test`) en el proyecto base, aprovechando las 3 semanas de margen. Se define qué se va a adaptar y qué se descartará por no ser aplicable a un sistema de recomendación de películas.
+## Descripción
 
-## Consideraciones Generales y Qué ELIMINAR 🗑️
-
-> [!WARNING]
-> **Eliminar `src/schemas/inference.py`**: Este archivo, copiado del repositorio del máster, contiene variables como `stress`, `burnout`, `motivation`, etc. Corresponden a un proyecto de Recursos Humanos o Bienestar, no a nuestro recomendador de Streaming. Lo eliminaremos (o ignoraremos) para crear esquemas verdaderamente útiles para nuestro negocio.
-
-> [!NOTE]
-> **No refactorizar el entrenamiento todavía**: Los modelos ya están entrenados y exportados a `.ONNX` y `.pkl`. Por ahora, aplicaremos *Pipelines* principalmente a la **evaluación** (`evaluacion_ranking`) y dejaremos los scripts de entrenamiento tal como están, para priorizar la estabilidad de la API.
+Implementar dos mejoras en la vista de usuario:
+1. **Sistema de valoraciones**: Los usuarios pueden puntuar películas (1-5 estrellas) desde la interfaz, almacenándose en una tabla nueva `user_ratings` en MySQL.
+2. **Tarjetas interactivas**: Reemplazar el botón "Ver sinopsis" actual por tarjetas con hover (muestra resumen) y click (abre modal/dialog con info completa).
 
 ---
 
-## Cambios Propuestos (Implementación) 🚀
+## User Review Required
 
-### 1. Schemas (`src/schemas/`)
-**Objetivo**: Tipado fuerte para la API de FastAPI. Evitar errores de formato entre Frontend y Backend.
-*   **Crear `src/schemas/recommendation.py`**:
-    *   Definiremos `RecommendationResponse`, `RecommendationItem`, etc.
-*   **Modificar `src/api/main_api.py`**:
-    *   Actualizar todos los endpoints (`/recomendar/svd/...`, `/recomendar/wnd/...`) para que retornen datos validados por Pydantic (los schemas creados) en lugar de diccionarios creados al vuelo.
+> [!IMPORTANT]
+> **Punto 1 — Valoraciones y su impacto en los modelos de IA:**
+> Las valoraciones del usuario se guardarán en una **tabla nueva** (`user_ratings`) en MySQL, **separada** del CSV `ratings_finales_ia.csv` (~434MB) que alimenta los modelos de IA. Esto significa:
+> - Las valoraciones nuevas **SÍ se registran** de forma persistente e inmediata.
+> - Los modelos de IA **NO se ven afectados** instantáneamente (siguen usando el CSV precargado en memoria al arrancar).
+> - En un futuro se podría crear un pipeline de reentrenamiento que incorpore estas valoraciones, pero eso queda fuera de este scope.
+> 
+> Este enfoque **no rompe nada** de la funcionalidad actual.
 
-### 2. Tracking / Telemetría (`src/tracking/`)
-**Objetivo**: Guardar un historial estructurado de qué recomendamos y a quién, vital para un sistema MLOps en producción.
-*   **Modificar `src/api/main_api.py`**:
-    *   Importar `RecommendationLogger` de `src/tracking/logger.py`.
-    *   Instanciar el logger al iniciar la App.
-    *   Inyectar el logging al final de cada endpoint de recomendación para que guarde en `logs/recommendations.jsonl` un evento cada vez que un usuario pide recomendaciones.
+> [!WARNING]
+> **Punto 2 — Limitaciones de Streamlit con interactividad:**
+> Streamlit no tiene soporte nativo para tooltips en hover sobre imágenes ni modals/popups con click. La solución es inyectar HTML/CSS/JS personalizado:
+> - **Hover**: overlay CSS puro (no necesita JS) que muestra la sinopsis al pasar el ratón sobre el póster.
+> - **Click**: Usaremos `st.dialog` (decorador nativo de Streamlit ≥1.35) para abrir un popup con la información completa. Esto es más limpio que el sidebar actual y compatible con tu versión de Streamlit.
 
-### 3. Métricas de Evaluación (`src/metrics/`)
-**Objetivo**: Desacoplar las fórmulas matemáticas del script principal.
-*   **Modificar `src/utils/evaluacion_ranking.py`**:
-    *   Actualmente, contiene funciones como `ndcg_at_k`, `precision_at_k`, `recall_at_k`, `hit_rate` en la cabecera.
-    *   Extraeremos estas funciones conformando clases que sigan el patrón definido en `src/metrics/protocols.py` y las guardaremos en `src/metrics/ranking.py`.
+---
 
-### 4. Pipelines (`src/pipelines/`)
-**Objetivo**: Estandarizar la evaluación multimodelo.
-*   **Modificar `src/utils/evaluacion_ranking.py`**:
-    *   El bucle gigante de evaluación (la función `evaluar()`) se refactorizará para hacer uso de una clase similar a `EvaluationPipeline` (basada en el archivo que copiaste).
-    *   El objetivo es que evaluar un modelo nuevo sea tan simple como registrarlo en el pipeline y darle al *Run*, en vez de añadir múltiples bloques `if "NUEVO_MODELO" in modelos: ...`.
+## Proposed Changes
 
-### 5. Configuración de Tests (`test/`)
-**Objetivo**: Asegurar que la API no se rompe con cambios futuros.
-*   **Implementar `test/test_api.py`**:
-    *   Crear unos tests básicos usando `TestClient` de FastAPI para verificar que los endpoints de recomendación responden HTTP 200 y devuelven el esquema correcto.
+### Base de Datos — Nueva tabla `user_ratings`
+
+#### [NEW] [create_user_ratings.sql](file:///c:/Users/User/Desktop/Programacion/Proyecto%204%20-%20Streaming/Proyecto%204%20-%20Streaming%20-%20main/src/data/scripts_sql/create_user_ratings.sql)
+- Tabla `user_ratings` con columnas: `id_usuario`, `tmdb_id`, `rating` (DECIMAL 2,1 para 0.5-5.0), `created_at`.
+- Primary key compuesta `(id_usuario, tmdb_id)` con `ON DUPLICATE KEY UPDATE` para permitir cambiar la valoración.
+- FK hacia `users(id_usuario)`.
+
+#### [MODIFY] [setup_completo.sql](file:///c:/Users/User/Desktop/Programacion/Proyecto%204%20-%20Streaming/Proyecto%204%20-%20Streaming%20-%20main/src/data/scripts_sql/setup_completo.sql)
+- Añadir el bloque de `user_ratings` al script de instalación completa.
+
+---
+
+### Backend API — Endpoints de valoración
+
+#### [MODIFY] [schemas.py](file:///c:/Users/User/Desktop/Programacion/Proyecto%204%20-%20Streaming/Proyecto%204%20-%20Streaming%20-%20main/src/schemas/schemas.py)
+- Añadir `RatingRequest(BaseModel)` con campos `user_id: int`, `tmdb_id: int`, `rating: float`.
+
+#### [MODIFY] [main_api.py](file:///c:/Users/User/Desktop/Programacion/Proyecto%204%20-%20Streaming/Proyecto%204%20-%20Streaming%20-%20main/src/api/main_api.py)
+- **`POST /api/rating`**: Registra o actualiza la valoración del usuario (`INSERT ... ON DUPLICATE KEY UPDATE`).
+- **`GET /api/ratings/{user_id}`**: Devuelve todas las valoraciones del usuario (para precargar estrellas ya dadas).
+- **`GET /api/movie/{tmdb_id}`**: Devuelve los datos completos de una película (adult, idioma, descripción, fecha, géneros) para el modal de detalle.
+
+---
+
+### Frontend — Vista de Usuario
+
+#### [MODIFY] [vista_usuario.py](file:///c:/Users/User/Desktop/Programacion/Proyecto%204%20-%20Streaming/Proyecto%204%20-%20Streaming%20-%20main/src/frontend/vista_usuario.py)
+
+**Cambios en `dibujar_tarjetas_contenido()`** (catálogo general):
+- Eliminar el botón "Ver sinopsis" y el `st.toast()`.
+- Reemplazar `st.image()` por un bloque HTML con overlay CSS que muestra la sinopsis al hacer hover sobre el póster.
+- Añadir un botón discreto "ℹ️ Info" debajo de cada tarjeta que abre un `@st.dialog` con la ficha completa (adultos, idioma, descripción, fecha, géneros).
+- Añadir un widget de estrellas (⭐) interactivo debajo de cada tarjeta usando `st.feedback("stars")` (nativo Streamlit) ó un selector `st.select_slider` estilizado con estrellas, que al cambiar hace `POST /api/rating`.
+
+**Cambios en `solicitar_y_dibujar_recomendaciones()`** (sección IA):
+- Mismos cambios: overlay hover + botón info + estrellas de valoración.
+- Eliminar el botón "Ver sinopsis" aquí también.
+
+**Cambios en sección Tragaperras** (serendipia):
+- Las tarjetas ya son HTML con sinopsis visible. Añadir únicamente el widget de estrellas al pie de cada tarjeta serendipia.
+
+---
+
+## Diseño Visual de las Tarjetas
+
+```
+┌─────────────────────┐
+│                     │
+│    [POSTER IMG]     │  ← Hover: overlay semitransparente
+│                     │     con sinopsis (CSS puro)
+│    ╔═══════════╗    │
+│    ║ Sinopsis  ║    │  ← Solo visible al hover
+│    ║ text ...  ║    │
+│    ╚═══════════╝    │
+│                     │
+├─────────────────────┤
+│ **Título** (2024)   │
+│ 7.5 / 10            │
+│ ⭐⭐⭐⭐☆  Tu nota │  ← Interactivo (Streamlit widget)
+│ [ℹ️ Info]            │  ← Abre @st.dialog
+└─────────────────────┘
+```
+
+**Dialog al hacer click en "ℹ️ Info":**
+```
+┌──────────────────────────────────┐
+│          TÍTULO (2024)      [✕]  │
+│──────────────────────────────────│
+│ [POSTER]  │ Idioma: en           │
+│           │ Adultos: No          │
+│           │ Fecha: 2024-01-15    │
+│           │ Géneros: Acción, Sci │
+│           │                      │
+│           │ Descripción completa │
+│           │ del contenido...     │
+└──────────────────────────────────┘
+```
+
+---
 
 ## Open Questions
 
 > [!IMPORTANT]
-> 1. **¿Confirmas que podemos ignorar/borrar `src/schemas/inference.py` (el que tiene temas de estrés/burnout)?**
-> 2. **¿Os gustaría que implementemos todo el plan directamente o prefieres que lo hagamos paso a paso, empezando solo por Schemas y Tracking para la API?**
+> **¿Escala de valoraciones?** Actualmente los modelos usan escala 0.5-5.0 (con incrementos de 0.5). ¿Quieres la misma escala para las valoraciones del usuario o prefieres estrellas enteras 1-5?
+> 
+> Streamlit tiene `st.feedback("stars")` que da 5 estrellas enteras. Si necesitas medias estrellas sería un slider customizado.
+
+---
 
 ## Verification Plan
 
-### Testeo manual:
-1. Levantaremos el servidor de desarrollo (`fastapi dev src/api/main_api.py`).
-2. Comprobaremos mediante peticiones que ahora se generan archivos enriquecidos en `logs/recommendations.jsonl`.
-3. Revisaremos que los endpoints devuelvan las recomendaciones exactamente igual que antes, pero validadas.
+### Automated Tests
+- Ejecutar el SQL `create_user_ratings.sql` y verificar que la tabla se crea.
+- Arrancar la aplicación con `uv run main.py` y probar:
+  - `POST /api/rating` con curl/httpx.
+  - `GET /api/ratings/{user_id}` para verificar persistencia.
+  - `GET /api/movie/{tmdb_id}` para verificar datos completos.
 
-### Testeo Automático:
-1. Se correrá `pytest test/` para confirmar que los nuevos esquemas de respuesta de la API no se desvían de lo planificado.
+### Manual Verification (Browser)
+- Abrir la vista de usuario en el navegador.
+- Verificar que al hacer hover sobre un póster aparece la sinopsis.
+- Verificar que al hacer click en "ℹ️ Info" se abre el dialog con la ficha completa.
+- Verificar que al dar estrellas se guarda la valoración y persiste al recargar.

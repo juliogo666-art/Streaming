@@ -218,9 +218,8 @@ src/data/clean/*.csv
 
 src/data/ready/*.csv
 
-*.csv
-*.json
-*.jsonl
+doc/
+
 
 
 # Guardar credenciales de acceso

@@ -5,7 +5,7 @@ import time
 from fastapi import FastAPI, HTTPException
 from .database import get_db_connection
 from .etl import ejecutar_importacion, limpiar_tablas_contenido
-from ..schemas.schemas import LoginRequest, RegisterRequest
+from ..schemas.schemas import LoginRequest, RegisterRequest, RatingRequest
 
 # [PASO 1: SCHEMAS] Definimos la salida estricta de la API para que frontend no falle
 from src.schemas.recommendation import RecommendationResponse
@@ -1189,3 +1189,215 @@ def recomendar_smart(user_id: int, n: int = 10):
     if isinstance(resultado, dict):
         resultado["selector"] = f"Smart → Content-Based (Último recurso)"
     return resultado
+
+
+##############################################################################################
+#  Valoraciones de Usuario (user_ratings)
+##############################################################################################
+
+
+@app.post("/api/rating")
+def registrar_valoracion(datos: RatingRequest):
+    """
+    Registra o actualiza la valoración de un usuario sobre una película.
+    Usa INSERT ... ON DUPLICATE KEY UPDATE para permitir cambiar la nota.
+    """
+    # Validar rango
+    if datos.rating < 0.5 or datos.rating > 5.0:
+        raise HTTPException(status_code=400, detail="La valoración debe estar entre 0.5 y 5.0")
+    # Validar paso de 0.5
+    if (datos.rating * 2) != int(datos.rating * 2):
+        raise HTTPException(status_code=400, detail="La valoración debe ser en pasos de 0.5 (ej: 0.5, 1.0, 1.5 ... 5.0)")
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            """
+            INSERT INTO user_ratings (id_usuario, tmdb_id, rating)
+            VALUES (%s, %s, %s)
+            ON DUPLICATE KEY UPDATE rating = VALUES(rating)
+            """,
+            (datos.user_id, datos.tmdb_id, datos.rating),
+        )
+        conn.commit()
+        logger.info(f"[RATING] User {datos.user_id} → Película {datos.tmdb_id} = {datos.rating}⭐")
+        return {"status": "success", "message": "Valoración registrada correctamente."}
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"[RATING] Error al registrar valoración: {e}")
+        raise HTTPException(status_code=500, detail=f"Error al guardar la valoración: {e}")
+    finally:
+        cursor.close()
+        conn.close()
+
+
+@app.get("/api/ratings/{user_id}")
+def obtener_valoraciones_usuario(user_id: int):
+    """
+    Devuelve todas las valoraciones que un usuario ha dado.
+    El frontend las usa para precargar las estrellas ya asignadas.
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
+    try:
+        cursor.execute(
+            "SELECT tmdb_id, rating FROM user_ratings WHERE id_usuario = %s",
+            (user_id,),
+        )
+        filas = cursor.fetchall()
+        # Devolvemos como dict {tmdb_id: rating} para búsqueda O(1) en el frontend
+        ratings_dict = {row["tmdb_id"]: float(row["rating"]) for row in filas}
+        return {"user_id": user_id, "ratings": ratings_dict}
+    except Exception as e:
+        logger.error(f"[RATING] Error al obtener valoraciones de user {user_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        cursor.close()
+        conn.close()
+
+
+@app.get("/api/movie/{tmdb_id}")
+def obtener_detalle_pelicula(tmdb_id: int):
+    """
+    Devuelve los datos completos de una película del catálogo en memoria.
+    Usado por el dialog/modal de ficha completa en el frontend.
+    """
+    if app.state.df_catalogo is None:
+        raise HTTPException(status_code=503, detail="Catálogo no cargado.")
+
+    match = app.state.df_catalogo[app.state.df_catalogo["tmdb_id"] == tmdb_id]
+    if match.empty:
+        raise HTTPException(status_code=404, detail=f"Película {tmdb_id} no encontrada en el catálogo.")
+
+    fila = match.iloc[0]
+    return {
+        "tmdb_id": int(fila["tmdb_id"]),
+        "titulo": str(fila.get("titulo", "Sin Título")),
+        "original_title": str(fila.get("original_title", "")),
+        "overview": str(fila.get("overview", "Sin sinopsis disponible.")),
+        "poster_path": str(fila.get("poster_path", "")),
+        "backdrop_path": str(fila.get("backdrop_path", "")),
+        "fecha_estreno": str(fila.get("fecha_estreno", "")),
+        "vote_average": float(fila.get("vote_average", 0)),
+        "vote_count": int(fila.get("vote_count", 0)),
+        "adult": bool(fila.get("adult", False)),
+        "original_language": str(fila.get("original_language", "")),
+        "genre_ids": str(fila.get("genre_ids", "[]")),
+        "popularity": float(fila.get("popularity", 0)),
+    }
+
+
+#  Serendipia
+
+
+# Mapeo de nombres de género español (tabla `genres`) → inglés (tabla `serendipity_cache`)
+_GENRE_ES_TO_EN: dict[str, str] = {
+    "Acción": "Action",
+    "Aventura": "Adventure",
+    "Animación": "Animation",
+    "Comedia": "Comedy",
+    "Crimen": "Crime",
+    "Documental": "Documentary",
+    "Drama": "Drama",
+    "Familia": "Family",
+    "Fantasía": "Fantasy",
+    "Historia": "History",
+    "Terror": "Horror",
+    "Música": "Music",
+    "Misterio": "Mystery",
+    "Romance": "Romance",
+    "Ciencia ficción": "Science Fiction",
+    "Película de TV": "TV Movie",
+    "Suspense": "Thriller",
+    "Bélica": "War",
+    "Western": "Western",
+}
+
+
+@app.get("/api/serendipia/{user_id}")
+def tragaperras_serendipia(user_id: int):
+    """Devuelve 3 películas 'joya oculta' seleccionadas con muestreo ponderado
+    por serendipity_score, personalizado con los 2 géneros favoritos del usuario.
+    Toda la matemática está pre-calculada en serendipity_cache; este endpoint es puro I/O.
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
+    try:
+        # 1. Obtener los 2 géneros favoritos del usuario
+        cursor.execute(
+            """
+            SELECT g.name AS genre_name
+            FROM user_interests ui
+            INNER JOIN genres g ON ui.genre_id = g.id
+            WHERE ui.id_usuario = %s
+            LIMIT 2
+            """,
+            (user_id,),
+        )
+        filas_generos = cursor.fetchall()
+
+        if not filas_generos:
+            raise HTTPException(
+                status_code=404,
+                detail=f"El usuario {user_id} no tiene géneros favoritos registrados.",
+            )
+
+        # Traducir nombres español → inglés para consultar serendipity_cache
+        generos_es = [f["genre_name"] for f in filas_generos]
+        generos = [_GENRE_ES_TO_EN.get(g, g) for g in generos_es]
+
+        # 2. Recuperar candidatos pre-calculados de la caché (sin matemáticas aquí)
+        placeholders = ", ".join(["%s"] * len(generos))
+        cursor.execute(
+            f"SELECT movie_id, genre, serendipity_score FROM serendipity_cache WHERE genre IN ({placeholders})",
+            tuple(generos),
+        )
+        candidatos = cursor.fetchall()
+
+    finally:
+        cursor.close()
+        conn.close()
+
+    if not candidatos:
+        raise HTTPException(
+            status_code=503,
+            detail="La caché de serendipia está vacía. Ejecuta: python -m src.serendipia.actualizar_cache_cron",
+        )
+
+    # 3. Excluir películas que el usuario ya ha puntuado
+    df = pd.DataFrame(candidatos)
+    df_ratings = getattr(app.state, "df_ratings_ia", None)
+    if df_ratings is not None:
+        ya_puntuadas = set(
+            df_ratings[df_ratings["userId"] == user_id]["tmdb_id"].tolist()
+        )
+        df = df[~df["movie_id"].isin(ya_puntuadas)]
+        logger.info(f"[Serendipia] User {user_id} | Excluidas {len(ya_puntuadas)} pelis ya puntuadas | Candidatas restantes: {len(df)}")
+
+    if df.empty:
+        raise HTTPException(
+            status_code=404,
+            detail=f"El usuario {user_id} ya ha puntuado todas las películas de sus géneros favoritos.",
+        )
+
+    # 4. Muestreo ponderado sin reemplazo (Pandas) usando serendipity_score como peso
+    n = min(3, len(df))
+    ganadores = df.sample(n=n, weights="serendipity_score", replace=False)
+
+    recomendaciones = [
+        {
+            "movie_id": int(row.movie_id),
+            "genre": str(row.genre),
+            "serendipity_score": round(float(row.serendipity_score), 8),
+        }
+        for row in ganadores.itertuples(index=False)
+    ]
+
+    logger.info(f"[Serendipia] User {user_id} | Géneros: {generos_es} → {generos} | Ganadores: {[r['movie_id'] for r in recomendaciones]}")
+
+    return {
+        "user_id": user_id,
+        "generos_favoritos": generos,
+        "recomendaciones": recomendaciones,
+    }

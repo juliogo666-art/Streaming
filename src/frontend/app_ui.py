@@ -426,12 +426,25 @@ if not st.session_state["autenticado"] and st.session_state["backend_listo"]:
                                 "http://127.0.0.1:8000/register", json=payload
                             )
                             if response.status_code == 200:
-                                st.success(
-                                    f"¡Bienvenido, {new_username}! Tu cuenta ha sido creada."
-                                )
-                                st.info(
-                                    "Ya puedes ir a la pestaña 'Iniciar Sesión' para entrar."
-                                )
+                                datos = response.json()
+                                user_info = datos.get("user")
+                                if user_info:
+                                    st.session_state["autenticado"] = True
+                                    st.session_state["usuario_actual"] = user_info
+                                    st.session_state["role"] = user_info.get(
+                                        "role", "user"
+                                    )
+                                    st.success(
+                                        f"¡Bienvenido, {new_username}! Entrando a SPIRE…"
+                                    )
+                                    st.rerun()
+                                else:
+                                    st.success(
+                                        f"¡Bienvenido, {new_username}! Tu cuenta ha sido creada."
+                                    )
+                                    st.info(
+                                        "Inicia sesión en la pestaña «Iniciar Sesión»."
+                                    )
                             else:
                                 error_detail = response.json().get(
                                     "detail", "Error desconocido"

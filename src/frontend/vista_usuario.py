@@ -5,8 +5,11 @@ ha iniciado sesión. No incluye opciones de administración, centrándose
 exclusivamente en presentar recomendaciones personalizadas y el catálogo general.
 """
 
+import ast
 import os
+import re
 import time
+from textwrap import dedent
 import requests
 import pandas as pd
 import streamlit as st
@@ -149,6 +152,38 @@ _CSS_TARJETAS_INTERACTIVAS = """
 .movie-detail-row strong {
     color: #B8860B;
 }
+
+/* --- Cabecera de perfil: chips de gustos (ML o favoritos) --- */
+.profile-gustos-block {
+    margin-top: 10px;
+    text-align: center;
+}
+.profile-gustos-label {
+    color: #888;
+    font-size: 0.95rem;
+    margin-bottom: 8px;
+    letter-spacing: 0.02em;
+}
+.profile-gustos-wrap {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    align-items: center;
+    gap: 6px;
+    max-width: 100%;
+    line-height: 1.35;
+}
+.profile-gusto-chip {
+    display: inline-block;
+    background: rgba(184, 134, 11, 0.18);
+    border: 1px solid rgba(184, 134, 11, 0.45);
+    color: #e8e0d5;
+    border-radius: 14px;
+    padding: 4px 11px;
+    font-size: 0.82rem;
+    max-width: 100%;
+    word-break: break-word;
+}
 </style>
 """
 
@@ -198,27 +233,47 @@ def render():
         st.title(f"Bienvenido a SPIRE, {nombre_mostrar}!")
 
     with col_info:
-        # Etiqueta visual para identificar rápidamente quién está usando la aplicación
-        gustos_top3 = usuario.get("gustos_top3", [])
+        # Etiqueta visual: nombre, ID y gustos (ML o géneros elegidos en user_interests)
+        gustos_nombres = usuario.get("gustos_top3") or []
         gustos_source = usuario.get("gustos_source")
-        gustos_texto = ""
-        if gustos_source == "ml_inferred" and gustos_top3:
-            gustos_texto = " · ".join(gustos_top3[:4])
-        html_identidad = f"""
-            <div style="
-                background: rgba(0,31,63,0.6);
-                border: 1px solid #1a3a5f;
-                border-radius: 8px;
-                padding: 8px 16px;
-                margin-top: 18px;
-                text-align: center;
-            ">
-                <span style="color:#B8860B; font-weight:1200; font-size:1.8rem;">{nombre_mostrar}</span>
-                <span style="color:#aaa; font-size:1.2rem;"> · ID: {id_usuario}</span></br>
-                <span style="color:#aaa; font-size:1.2rem;"> · Tus gustos detectados (ML): {gustos_texto}</span>
+        nombre_safe = _escapar_html(str(nombre_mostrar))
+        id_safe = _escapar_html(str(id_usuario))
+
+        bloque_gustos = ""
+        if gustos_nombres and gustos_source in ("ml_inferred", "user_selected"):
+            etiqueta_gustos = (
+                "Tus gustos detectados (ML)"
+                if gustos_source == "ml_inferred"
+                else "Tus géneros favoritos"
+            )
+            etiqueta_safe = _escapar_html(etiqueta_gustos)
+            chips = "".join(
+                f'<span class="profile-gusto-chip">{_escapar_html(str(n))}</span>'
+                for n in gustos_nombres
+            )
+            # HTML compacto: st.markdown interpretaba líneas indentadas como bloques de código.
+            bloque_gustos = (
+                f'<div class="profile-gustos-block">'
+                f'<div class="profile-gustos-label">{etiqueta_safe}</div>'
+                f'<div class="profile-gustos-wrap">{chips}</div>'
+                f"</div>"
+            )
+
+        # st.html evita el parser Markdown (que mostraba las etiquetas como texto plano).
+        estilo_tarjeta = (
+            "background:rgba(0,31,63,0.6);border:1px solid #1a3a5f;"
+            "border-radius:8px;padding:8px 16px;margin-top:18px;text-align:center;"
+        )
+        html_identidad = dedent(
+            f"""
+            <div style="{estilo_tarjeta}">
+            <span style="color:#B8860B;font-weight:1200;font-size:1.8rem;">{nombre_safe}</span>
+            <span style="color:#aaa;font-size:1.2rem;"> · ID: {id_safe}</span><br>
+            {bloque_gustos}
             </div>
-        """
-        st.markdown(html_identidad, unsafe_allow_html=True)
+            """
+        ).strip()
+        st.html(html_identidad)
 
     with col_logout:
         st.write("")  # Espaciado para alinear verticalmente el botón
@@ -281,7 +336,6 @@ def render():
     with pestana_peliculas:
         dibujar_contenido_pestana(
             dataframe=datos_peliculas,
-            termino_busqueda=texto_busqueda,
             es_pelicula=True,
             identificador_usuario=id_usuario,
             prefijo_clave_streamlit="usr_mov",
@@ -291,7 +345,6 @@ def render():
     with pestana_series:
         dibujar_contenido_pestana(
             dataframe=datos_series,
-            termino_busqueda=texto_busqueda,
             es_pelicula=False,
             identificador_usuario=id_usuario,
             prefijo_clave_streamlit="usr_tv",
@@ -375,6 +428,163 @@ def cargar_datos_catalogo():
             print(f"Error cargando series: {e}")
 
     return df_peliculas, df_series
+
+
+# Nombres de géneros TMDB (cine y TV) para mostrar y filtrar en la UI.
+TMDB_GENRE_NAMES = {
+    28: "Acción",
+    12: "Aventura",
+    16: "Animación",
+    35: "Comedia",
+    80: "Crimen",
+    99: "Documental",
+    18: "Drama",
+    10751: "Familia",
+    14: "Fantasía",
+    36: "Historia",
+    27: "Terror",
+    10402: "Música",
+    9648: "Misterio",
+    10749: "Romance",
+    878: "Ciencia ficción",
+    10770: "Película de TV",
+    53: "Suspense",
+    10752: "Bélica",
+    37: "Western",
+    10759: "Acción y aventura",
+    10762: "Infantil",
+    10763: "Noticias",
+    10764: "Reality",
+    10765: "Ciencia ficción y fantasía",
+    10766: "Telenovela",
+    10767: "Talk Show",
+    10768: "Guerra y política",
+}
+
+
+def parse_genre_ids(celda):
+    """Convierte el campo genre_ids del CSV (p. ej. '[27, 28]') en una lista de enteros."""
+    if celda is None or (isinstance(celda, float) and pd.isna(celda)):
+        return []
+    s = str(celda).strip()
+    if not s or s.lower() == "nan":
+        return []
+    try:
+        valor = ast.literal_eval(s)
+        if isinstance(valor, (list, tuple)):
+            return [int(x) for x in valor]
+    except (ValueError, SyntaxError, TypeError):
+        pass
+    return [int(x) for x in re.findall(r"\d+", s)]
+
+
+def ids_generos_presentes_en_catalogo(dataframe):
+    """Conjunto de IDs de género que aparecen al menos una vez en el catálogo."""
+    if dataframe.empty or "genre_ids" not in dataframe.columns:
+        return set()
+    ids = set()
+    for celda in dataframe["genre_ids"]:
+        ids.update(parse_genre_ids(celda))
+    return ids
+
+
+def _serie_anos_por_fila(dataframe, columna_fecha):
+    """
+    Año por fila para filtros y slider: usa ``ano`` cuando viene informado;
+    si no, el año de la fecha de estreno (evita datasets donde ``ano`` está casi vacío).
+    """
+    if dataframe.empty:
+        return pd.Series(dtype="Float64")
+    idx = dataframe.index
+    col = columna_fecha if columna_fecha in dataframe.columns else None
+    if col:
+        fechas = pd.to_datetime(dataframe[col], errors="coerce")
+        desde_fecha = fechas.dt.year.astype("Float64")
+    else:
+        desde_fecha = pd.Series([pd.NA] * len(dataframe), index=idx, dtype="Float64")
+    if "ano" in dataframe.columns:
+        y_ano = pd.to_numeric(dataframe["ano"], errors="coerce").astype("Float64")
+        return y_ano.where(y_ano.notna(), desde_fecha)
+    return desde_fecha
+
+
+def rango_anos_desde_catalogo(dataframe, columna_fecha):
+    """Devuelve (año_mín, año_máx) para el slider a partir del año efectivo por fila."""
+    if dataframe.empty:
+        return 1900, 2030
+    años = _serie_anos_por_fila(dataframe, columna_fecha).dropna()
+    if años.empty:
+        return 1900, 2030
+    return int(años.min()), int(años.max())
+
+
+def resolver_columna_fecha(dataframe, es_pelicula):
+    """Elige la columna de fecha más fiable según el dataset cargado."""
+    if not es_pelicula and "first_air_date" in dataframe.columns:
+        return "first_air_date"
+    if "fecha_estreno" in dataframe.columns:
+        return "fecha_estreno"
+    return "fecha_estreno"
+
+
+def serie_anos_para_filtro(dataframe, columna_fecha):
+    """Serie de años alineada al DataFrame (misma regla que el slider)."""
+    return _serie_anos_por_fila(dataframe, columna_fecha)
+
+
+def aplicar_criterios_busqueda_catalogo(
+    dataframe,
+    texto_titulo,
+    ids_genero,
+    año_min,
+    año_max,
+    aplicar_filtro_año,
+    modo_orden,
+    columna_fecha,
+):
+    """
+    Filtra el catálogo por título y/o géneros y/o rango de año, y ordena según modo_orden.
+    """
+    if modo_orden not in (None, "", "sin_seleccionar", "popular", "rating", "fecha"):
+        modo_orden = "sin_seleccionar"
+
+    out = dataframe
+    texto = (texto_titulo or "").strip()
+
+    if texto and "titulo" in out.columns:
+        out = out[out["titulo"].str.contains(texto, case=False, na=False, regex=False)]
+
+    if ids_genero and "genre_ids" in out.columns:
+        seleccion = set(ids_genero)
+
+        def coincide_generos(fila):
+            return not seleccion.isdisjoint(set(parse_genre_ids(fila.get("genre_ids"))))
+
+        mascara_gen = out.apply(coincide_generos, axis=1)
+        out = out[mascara_gen]
+
+    if aplicar_filtro_año:
+        años = serie_anos_para_filtro(out, columna_fecha)
+        mascara_año = años.notna() & (años >= año_min) & (años <= año_max)
+        out = out[mascara_año]
+
+    if out.empty:
+        return out
+
+    if modo_orden in (None, "", "sin_seleccionar"):
+        return out
+
+    if modo_orden == "popular" and "vote_count" in out.columns:
+        out = out.sort_values(by="vote_count", ascending=False)
+    elif modo_orden == "rating" and "vote_average" in out.columns:
+        out = out.sort_values(by="vote_average", ascending=False)
+    elif modo_orden == "fecha" and columna_fecha in out.columns:
+        fechas = pd.to_datetime(out[columna_fecha], errors="coerce")
+        out = out.assign(_ord_fecha=fechas).sort_values(
+            by="_ord_fecha", ascending=False, na_position="last"
+        )
+        out = out.drop(columns=["_ord_fecha"])
+    return out
 
 
 # ##############################################################################
@@ -831,7 +1041,6 @@ def solicitar_y_dibujar_recomendaciones(
 
 def dibujar_contenido_pestana(
     dataframe,
-    termino_busqueda,
     es_pelicula=True,
     identificador_usuario=None,
     prefijo_clave_streamlit="usr",
@@ -839,43 +1048,132 @@ def dibujar_contenido_pestana(
 ):
     """
     Estructura principal de visualización dentro de cada pestaña (Películas o Series).
-    Decide en qué orden pintar las secciones: Resultados de búsqueda, Recomendaciones, Top y Populares.
+    Incluye un formulario con botón «Buscar»: solo ejecuta consulta si hay título o filtros;
+    con una búsqueda activa muestra únicamente resultados hasta que se pulse «Limpiar».
     """
     if valoraciones_usuario is None:
         valoraciones_usuario = {}
 
     # Determinamos prefijos y nombres de columnas base según si es película o serie
     prefijo_tipo = f"{prefijo_clave_streamlit}_{'mov' if es_pelicula else 'tv'}"
-    columna_fecha = "fecha_estreno" if es_pelicula else "first_air_date"
+    columna_fecha = resolver_columna_fecha(dataframe, es_pelicula)
+    clave_busqueda_catalogo = f"{prefijo_clave_streamlit}_catalogo_busqueda"
 
-    # --- FLUJO DE BÚSQUEDA ---
-    # Si el usuario escribió algo, solo mostramos resultados que coincidan
-    if termino_busqueda:
-        st.subheader(f"Resultados de búsqueda para: '{termino_busqueda}'")
+    año_min_cat, año_max_cat = rango_anos_desde_catalogo(dataframe, columna_fecha)
+    ids_cat = sorted(ids_generos_presentes_en_catalogo(dataframe))
+    etiquetas_genero = [
+        TMDB_GENRE_NAMES.get(i, f"Género ({i})") for i in ids_cat
+    ]
+    mapa_etiqueta_a_id = dict(zip(etiquetas_genero, ids_cat))
 
-        if not dataframe.empty and "titulo" in dataframe.columns:
-            # Filtramos de forma insensible a mayúsculas/minúsculas usando regex
-            mascara = dataframe["titulo"].str.contains(
-                termino_busqueda, case=False, na=False
+    with st.form(f"form_buscar_catalogo_{prefijo_tipo}"):
+        with st.expander("Filtros y búsqueda del catálogo", expanded=False):
+            texto_titulo = st.text_input(
+                "Título (opcional)",
+                placeholder="Buscar por nombre…",
+                key=f"{prefijo_tipo}_input_titulo",
             )
-            resultados_filtrados = dataframe[mascara]
-
-            if not resultados_filtrados.empty:
-                dibujar_tarjetas_contenido(
-                    dataframe=resultados_filtrados,
-                    limite_mostrar=12,
-                    prefijo_clave=f"{prefijo_tipo}_search",
-                    columna_fecha=columna_fecha,
-                    id_usuario=identificador_usuario,
-                    valoraciones_usuario=valoraciones_usuario,
-                )
+            generos_elegidos = st.multiselect(
+                "Géneros",
+                options=etiquetas_genero,
+                default=[],
+                key=f"{prefijo_tipo}_multiselect_generos",
+            )
+            filtro_por_año_posible = True
+            if año_min_cat >= año_max_cat:
+                st.caption(f"Todo el catálogo corresponde al año **{año_min_cat}**.")
+                rango_año = (año_min_cat, año_max_cat)
+                filtro_por_año_posible = False
             else:
-                st.info("No se encontraron coincidencias para tu búsqueda.")
-        else:
-            st.info("El catálogo no está disponible para realizar la búsqueda.")
-        return  # Termina temprano: si hay búsqueda no mostramos las secciones por defecto
+                rango_año = st.slider(
+                    "Año de estreno",
+                    min_value=año_min_cat,
+                    max_value=año_max_cat,
+                    value=(año_min_cat, año_max_cat),
+                    key=f"{prefijo_tipo}_slider_anio",
+                )
+            modo_orden = st.selectbox(
+                "Ordenar resultados por",
+                options=["sin_seleccionar", "popular", "rating", "fecha"],
+                index=0,
+                format_func=lambda v: {
+                    "sin_seleccionar": "Sin seleccionar",
+                    "popular": "Más populares (votos)",
+                    "rating": "Mejor valoradas",
+                    "fecha": "Fecha (más recientes)",
+                }[v],
+                help=(
+                    "Por defecto «Sin seleccionar» mantiene el orden original del catálogo "
+                    "después de filtrar."
+                ),
+                key=f"{prefijo_tipo}_select_orden",
+            )
+            col_buscar, col_limpiar = st.columns(2)
+            with col_buscar:
+                pulsado_buscar = st.form_submit_button("Buscar")
+            with col_limpiar:
+                pulsado_limpiar = st.form_submit_button("Limpiar")
 
-    # --- FLUJO NORMAL (Sin búsqueda activa) ---
+    if pulsado_limpiar:
+        st.session_state[clave_busqueda_catalogo] = None
+
+    if pulsado_buscar:
+        texto_limpio = (texto_titulo or "").strip()
+        ids_genero = [mapa_etiqueta_a_id[g] for g in generos_elegidos if g in mapa_etiqueta_a_id]
+        año_lo, año_hi = rango_año
+        filtro_año_activo = filtro_por_año_posible and (año_lo, año_hi) != (
+            año_min_cat,
+            año_max_cat,
+        )
+        tiene_criterio = bool(texto_limpio) or bool(ids_genero) or filtro_año_activo
+
+        if not tiene_criterio:
+            st.session_state[clave_busqueda_catalogo] = None
+            st.info(
+                "Escribe un título o selecciona al menos un filtro (género o rango de años distinto al completo) para buscar."
+            )
+        else:
+            st.session_state[clave_busqueda_catalogo] = {
+                "texto": texto_limpio,
+                "ids_genero": ids_genero,
+                "año_min": int(año_lo),
+                "año_max": int(año_hi),
+                "aplicar_filtro_año": filtro_año_activo,
+                "orden": modo_orden,
+            }
+
+    criterios = st.session_state.get(clave_busqueda_catalogo)
+
+    if criterios:
+        st.subheader("Resultados de búsqueda")
+
+        if dataframe.empty or "titulo" not in dataframe.columns:
+            st.info("El catálogo no está disponible para realizar la búsqueda.")
+            return
+
+        resultados = aplicar_criterios_busqueda_catalogo(
+            dataframe,
+            texto_titulo=criterios.get("texto", ""),
+            ids_genero=criterios.get("ids_genero") or [],
+            año_min=criterios.get("año_min", año_min_cat),
+            año_max=criterios.get("año_max", año_max_cat),
+            aplicar_filtro_año=criterios.get("aplicar_filtro_año", False),
+            modo_orden=criterios.get("orden", "sin_seleccionar"),
+            columna_fecha=columna_fecha,
+        )
+
+        if resultados.empty:
+            st.info("No se encontraron coincidencias con los criterios indicados.")
+        else:
+            dibujar_tarjetas_contenido(
+                dataframe=resultados,
+                limite_mostrar=30,
+                prefijo_clave=f"{prefijo_tipo}_search",
+                columna_fecha=columna_fecha,
+            )
+        return
+
+    # --- FLUJO NORMAL (Sin búsqueda activa en catálogo) ---
 
     # Sección 1: Recomendaciones Personalizadas (IA)
     st.subheader("Recomendado para ti")

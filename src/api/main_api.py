@@ -311,6 +311,43 @@ def importar_datos():
 # LoginRequest y RegisterRequest importados de src.schemas.schemas
 
 
+def _adjuntar_gustos_perfil(cursor, usuario: dict) -> None:
+    """Rellena gustos_top3 y gustos_source (prioridad ML; si no hay, user_selected)."""
+    uid = usuario["id_usuario"]
+    cursor.execute(
+        """
+        SELECT g.id, g.name
+        FROM user_interests ui
+        JOIN genres g ON g.id = ui.genre_id
+        WHERE ui.id_usuario = %s
+          AND ui.source = 'ml_inferred'
+        ORDER BY g.name ASC
+        LIMIT 3
+        """,
+        (uid,),
+    )
+    gustos_ml = cursor.fetchall()
+    if gustos_ml:
+        usuario["gustos_top3"] = [row["name"] for row in gustos_ml]
+        usuario["gustos_source"] = "ml_inferred"
+        return
+    cursor.execute(
+        """
+        SELECT g.id, g.name
+        FROM user_interests ui
+        JOIN genres g ON g.id = ui.genre_id
+        WHERE ui.id_usuario = %s
+          AND (ui.source = 'user_selected' OR ui.source IS NULL)
+        ORDER BY g.name ASC
+        """,
+        (uid,),
+    )
+    gustos_sel = cursor.fetchall()
+    if gustos_sel:
+        usuario["gustos_top3"] = [row["name"] for row in gustos_sel]
+        usuario["gustos_source"] = "user_selected"
+
+
 @app.post("/login")
 def login(datos: LoginRequest):
     conn = get_db_connection()
@@ -337,24 +374,7 @@ def login(datos: LoginRequest):
                 es_valido = datos.password == hash_guardado
 
             if es_valido:
-                # Si el usuario tiene intereses inferidos por ML, devolvemos top-3 gustos.
-                # Esto permite al frontend mostrarlos de forma contextual tras el login.
-                cursor.execute(
-                    """
-                    SELECT g.id, g.name
-                    FROM user_interests ui
-                    JOIN genres g ON g.id = ui.genre_id
-                    WHERE ui.id_usuario = %s
-                      AND ui.source = 'ml_inferred'
-                    ORDER BY g.name ASC
-                    LIMIT 3
-                    """,
-                    (usuario["id_usuario"],),
-                )
-                gustos_ml = cursor.fetchall()
-                if gustos_ml:
-                    usuario["gustos_top3"] = [row["name"] for row in gustos_ml]
-                    usuario["gustos_source"] = "ml_inferred"
+                _adjuntar_gustos_perfil(cursor, usuario)
 
                 # Por seguridad, borramos la contraseña del diccionario temporal antes de mandarlo al frontend
                 del usuario["passwd"]
@@ -445,19 +465,33 @@ def register(datos: RegisterRequest):
             res_pop = cursor.fetchall()
             intereses = [row["genre_id"] for row in res_pop]
 
-        # Insertar intereses
+        # Insertar intereses (origen: selección en el registro)
         if intereses:
-            query_int = (
-                "INSERT INTO user_interests (id_usuario, genre_id) VALUES (%s, %s)"
-            )
+            query_int = """
+                INSERT INTO user_interests (id_usuario, genre_id, source)
+                VALUES (%s, %s, 'user_selected')
+            """
             for g_id in intereses:
                 cursor.execute(query_int, (id_usuario, g_id))
 
         conn.commit()
+
+        cursor.execute(
+            "SELECT id_usuario, username, email, role FROM users WHERE id_usuario = %s",
+            (id_usuario,),
+        )
+        usuario_resp = cursor.fetchone()
+        if not usuario_resp:
+            raise HTTPException(
+                status_code=500, detail="Usuario creado pero no se pudo leer el perfil."
+            )
+        _adjuntar_gustos_perfil(cursor, usuario_resp)
+
         return {
             "status": "success",
             "message": "Usuario registrado correctamente",
             "user_id": id_usuario,
+            "user": usuario_resp,
         }
 
     except Exception as e:

@@ -7,6 +7,7 @@ exclusivamente en presentar recomendaciones personalizadas y el catálogo genera
 
 import ast
 import os
+import random
 import re
 import time
 from textwrap import dedent
@@ -282,6 +283,8 @@ def render():
             st.session_state["autenticado"] = False
             st.session_state["usuario_actual"] = None
             st.session_state["role"] = None
+            st.session_state["vista_serendipia"] = False
+            st.session_state["serendipia_resultado"] = None
             st.rerun()
 
     # Routing: si el usuario activó la tragaperras, redirigir a esa vista
@@ -293,33 +296,42 @@ def render():
         "Descubre Películas y Series gracias a nuestro Recomendador de Inteligencia Artificial."
     )
 
-    # Botón de acceso a la tragaperras
+    # Botón de acceso a la tragaperras (solo si el usuario tiene géneros favoritos)
+    tiene_gustos = bool(usuario.get("gustos_top3"))
     col_btn_slot, _ = st.columns([2, 8])
     with col_btn_slot:
-        st.markdown(
-            """
-            <style>
-            div[data-testid="stButton"] button[kind="primary"] {
-                background: linear-gradient(135deg, #8B0000 0%, #B8860B 100%);
-                border: 2px solid #FFD700;
-                border-radius: 12px;
-                font-size: 1.15rem;
-                font-weight: 700;
-                letter-spacing: 0.05em;
-            }
-            </style>
-            """,
-            unsafe_allow_html=True,
-        )
-        if st.button(
-            "🎰  Joya Oculta",
-            key="btn_open_tragaperras",
-            type="primary",
-            use_container_width=True,
-        ):
-            st.session_state["vista_serendipia"] = True
-            st.session_state["serendipia_resultado"] = None
-            st.rerun()
+        if tiene_gustos:
+            st.markdown(
+                """
+                <style>
+                div[data-testid="stButton"] button[kind="primary"] {
+                    background: linear-gradient(135deg, #8B0000 0%, #B8860B 100%);
+                    border: 2px solid #FFD700;
+                    border-radius: 12px;
+                    font-size: 1.15rem;
+                    font-weight: 700;
+                    letter-spacing: 0.05em;
+                }
+                </style>
+                """,
+                unsafe_allow_html=True,
+            )
+            if st.button(
+                "🎰  Tragaperras Cinéfila",
+                key="btn_open_tragaperras",
+                type="primary",
+                use_container_width=True,
+            ):
+                st.session_state["vista_serendipia"] = True
+                st.session_state["serendipia_resultado"] = None
+                st.rerun()
+        else:
+            st.markdown(
+                "<div style='color:#555;font-size:0.82rem;margin-top:6px;line-height:1.4;'>"
+                "🎰 <i>Tragaperras Cinéfila disponible cuando tengas géneros favoritos asignados.</i>"
+                "</div>",
+                unsafe_allow_html=True,
+            )
 
     # 3. Barra de búsqueda general
     texto_busqueda = st.text_input("Busca por título...", key="input_busqueda_usuario")
@@ -1232,72 +1244,236 @@ def dibujar_contenido_pestana(
 
 
 # ##############################################################################
-#  Vista Tragaperras — Joya Oculta (Serendipia)
+#  Vista Tragaperras Cinéfila (Serendipia)
 # ##############################################################################
+
+# Símbolos para la animación de tragaperras
+_SLOT_SYMBOLS = ["🎬", "🎭", "🎪", "🎨", "🎥", "🎞️", "⭐", "🔮", "🎯", "🌟", "💫", "✨", "🏆", "🎖️"]
+
+
+def _html_tragaperras_frame(simbolos: list, fase: str = "spinning") -> str:
+    """Genera el HTML de un frame de animación de la tragaperras."""
+    es_jackpot = fase == "jackpot"
+
+    if es_jackpot:
+        border_color = "#FFD700"
+        glow_css = "box-shadow: 0 0 40px #FFD700, 0 0 80px rgba(255,165,0,0.6), inset 0 0 20px rgba(255,215,0,0.1);"
+        label = "🎥 ¡¡PELICÍCULA ENCONTRADA!! 🎥"
+        label_color = "#FFD700"
+        reel_bg = "rgba(40,25,0,0.95)"
+        sym_style = "filter: drop-shadow(0 0 8px #FFD700);"
+    else:
+        border_color = "#4a3500"
+        glow_css = "box-shadow: 0 4px 24px rgba(0,0,0,0.7);"
+        label = "🎰  Girando los rodillos..."
+        label_color = "#666"
+        reel_bg = "rgba(0,10,25,0.95)"
+        sym_style = ""
+
+    # Perforaciones laterales estilo carrete de cine
+    sprockets = "".join(
+        '<div style="width:16px;height:22px;border-radius:4px;background:#111;margin:5px 0;"></div>'
+        for _ in range(4)
+    )
+    sprocket_strip = (
+        f'<div style="display:flex;flex-direction:column;align-items:center;'
+        f'background:#1a1a1a;padding:8px 6px;border-radius:6px;">{sprockets}</div>'
+    )
+
+    reels = "".join(
+        f'<div style="background:{reel_bg};border:3px solid {border_color};'
+        f'border-radius:12px;padding:20px 24px;font-size:3.6rem;text-align:center;'
+        f'min-width:100px;{glow_css};{sym_style}">{s}</div>'
+        for s in simbolos
+    )
+
+    machine_frame = (
+        f'<div style="background:linear-gradient(180deg,#1a0a00 0%,#0d0500 100%);'
+        f'border:3px solid #3a2200;border-radius:20px;padding:24px 28px;'
+        f'display:inline-block;box-shadow:0 8px 40px rgba(0,0,0,0.8),inset 0 1px 0 rgba(255,200,0,0.15);">'
+        f'<div style="display:flex;align-items:center;gap:14px;">'
+        f'{sprocket_strip}'
+        f'<div style="display:flex;gap:14px;">{reels}</div>'
+        f'{sprocket_strip}'
+        f'</div>'
+        f'</div>'
+    )
+
+    return (
+        f'<div style="text-align:center;padding:28px 0;">'
+        f'<div style="font-size:1.1rem;color:{label_color};margin-bottom:20px;'
+        f'font-weight:700;letter-spacing:0.12em;text-transform:uppercase;">{label}</div>'
+        f'{machine_frame}'
+        f'</div>'
+    )
 
 
 _CSS_TRAGAPERRAS = """
 <style>
+/* ====== CONTENEDOR GENERAL DE LA TRAGAPERRAS ====== */
+.slot-page-wrap {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 0 12px;
+}
+
+/* ====== CABECERA CON TIRA DE CINE ====== */
 .slot-header {
     text-align: center;
-    padding: 24px 0 8px 0;
+    padding: 32px 0 12px 0;
+    position: relative;
+}
+.slot-filmstrip {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    margin-bottom: 18px;
+}
+.slot-filmstrip-bar {
+    flex: 1;
+    height: 28px;
+    background: repeating-linear-gradient(
+        90deg,
+        #1a1a1a 0px, #1a1a1a 16px,
+        #2a2a2a 16px, #2a2a2a 18px,
+        #1a1a1a 18px, #1a1a1a 34px
+    );
+    border-radius: 4px;
+    position: relative;
+    overflow: hidden;
+    max-width: 180px;
+}
+.slot-filmstrip-bar::before, .slot-filmstrip-bar::after {
+    content: '';
+    position: absolute;
+    top: 3px;
+    bottom: 3px;
+    left: 0;
+    right: 0;
+    background: repeating-linear-gradient(
+        90deg,
+        transparent 0px, transparent 10px,
+        rgba(255,215,0,0.12) 10px, rgba(255,215,0,0.12) 12px
+    );
 }
 .slot-title {
-    font-size: 3rem;
+    font-size: 3.2rem;
     font-weight: 900;
-    background: linear-gradient(90deg, #FFD700, #FF8C00, #FFD700);
+    background: linear-gradient(90deg, #FFD700 0%, #FF8C00 30%, #FFF176 50%, #FF8C00 70%, #FFD700 100%);
+    background-size: 200% auto;
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
-    letter-spacing: 0.08em;
+    letter-spacing: 0.06em;
     text-shadow: none;
+    line-height: 1.1;
+    animation: shimmer-title 3s linear infinite;
+}
+@keyframes shimmer-title {
+    0%   { background-position: 0% center; }
+    100% { background-position: 200% center; }
 }
 .slot-subtitle {
-    color: #aaa;
-    font-size: 1.1rem;
-    margin-top: 4px;
+    color: #888;
+    font-size: 1.05rem;
+    margin-top: 8px;
+    letter-spacing: 0.04em;
 }
+.slot-divider {
+    height: 2px;
+    margin: 18px auto;
+    max-width: 600px;
+    background: linear-gradient(90deg, transparent, #B8860B 20%, #FFD700 50%, #B8860B 80%, transparent);
+    border-radius: 2px;
+}
+
+/* ====== TARJETA DE PELÍCULA ====== */
 .slot-card {
-    background: rgba(0, 20, 45, 0.85);
-    border: 2px solid #B8860B;
-    border-radius: 16px;
-    padding: 18px 14px 14px 14px;
+    background: linear-gradient(160deg, rgba(10,25,55,0.95) 0%, rgba(0,12,30,0.98) 100%);
+    border: 1px solid rgba(184,134,11,0.5);
+    border-radius: 18px;
+    padding: 14px 14px 16px 14px;
     text-align: center;
-    height: 100%;
+    transition: transform 0.28s ease, box-shadow 0.28s ease, border-color 0.28s ease;
+    position: relative;
+    overflow: hidden;
 }
-.slot-card img { border-radius: 8px; }
+.slot-card::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(135deg, rgba(255,215,0,0.04) 0%, transparent 60%);
+    border-radius: 18px;
+    pointer-events: none;
+}
+.slot-card:hover {
+    transform: translateY(-6px) scale(1.02);
+    box-shadow: 0 12px 40px rgba(184,134,11,0.3), 0 0 0 1px rgba(255,215,0,0.25);
+    border-color: rgba(255,215,0,0.6);
+}
 .slot-movie-title {
     color: #FFD700;
     font-weight: 700;
-    font-size: 1rem;
-    margin-top: 10px;
-    min-height: 2.4em;
+    font-size: 0.95rem;
+    margin-top: 12px;
+    min-height: 2.6em;
+    line-height: 1.3;
 }
 .slot-genre-badge {
     display: inline-block;
-    background: rgba(184, 134, 11, 0.25);
-    border: 1px solid #B8860B;
+    background: linear-gradient(90deg, rgba(139,0,0,0.35), rgba(184,134,11,0.35));
+    border: 1px solid rgba(184,134,11,0.7);
     color: #FFD700;
     border-radius: 20px;
-    padding: 2px 12px;
-    font-size: 0.8rem;
-    margin-top: 6px;
+    padding: 3px 14px;
+    font-size: 0.78rem;
+    margin-top: 8px;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    font-weight: 600;
 }
 .slot-score-bar-wrap {
-    background: rgba(255,255,255,0.08);
-    border-radius: 8px;
-    height: 8px;
-    margin-top: 10px;
+    background: rgba(255,255,255,0.07);
+    border-radius: 10px;
+    height: 6px;
+    margin-top: 12px;
     overflow: hidden;
 }
 .slot-score-bar-fill {
-    height: 8px;
-    border-radius: 8px;
-    background: linear-gradient(90deg, #B8860B, #FFD700);
+    height: 6px;
+    border-radius: 10px;
+    background: linear-gradient(90deg, #8B0000, #B8860B, #FFD700);
+    box-shadow: 0 0 6px rgba(255,215,0,0.4);
 }
 .slot-score-label {
+    color: #666;
+    font-size: 0.72rem;
+    margin-top: 5px;
+    letter-spacing: 0.03em;
+}
+
+/* ====== ZONA DE ESPERA (antes de tirar) ====== */
+.slot-waiting {
+    text-align: center;
+    margin-top: 60px;
+    animation: pulse-wait 2.5s ease-in-out infinite;
+}
+@keyframes pulse-wait {
+    0%, 100% { opacity: 0.6; }
+    50%       { opacity: 1;   }
+}
+
+/* ====== GÉNEROS FAVORITOS ====== */
+.slot-genres-bar {
+    text-align: center;
+    margin: 0 auto 24px auto;
+    padding: 10px 20px;
+    background: rgba(0,15,35,0.6);
+    border: 1px solid rgba(184,134,11,0.25);
+    border-radius: 30px;
+    max-width: 700px;
     color: #aaa;
-    font-size: 0.75rem;
-    margin-top: 4px;
+    font-size: 0.9rem;
 }
 </style>
 """
@@ -1306,36 +1482,52 @@ _CSS_TRAGAPERRAS = """
 def _tarjeta_serendipia_html(
     titulo: str, poster_url: str, genero: str, score: float, overview: str, año: str
 ) -> str:
-    """Genera el HTML de una tarjeta de película para la tragaperras."""
+    """Genera el HTML de una tarjeta de película para la tragaperras con hover overlay de sinopsis."""
     pct = int(score * 100)
-    titulo_safe = titulo[:35] + "..." if len(titulo) > 35 else titulo
-    overview_safe = (
-        overview[:120] + "..." if overview and len(overview) > 120 else (overview or "")
+    titulo_corto = titulo[:35] + "..." if len(titulo) > 35 else titulo
+    titulo_safe = _escapar_html(titulo)
+    sinopsis_safe = _escapar_html(
+        overview[:300] + "..." if overview and len(overview) > 300 else (overview or "Sin sinopsis disponible.")
+    )
+    año_html = (
+        f"<span style='color:#aaa;font-weight:400;font-size:0.85rem;'>({año})</span>"
+        if año
+        else ""
     )
     return f"""
     <div class="slot-card">
-        <img src="{poster_url}" width="100%" style="border-radius:8px;">
-        <div class="slot-movie-title">{titulo_safe} <span style='color:#aaa;font-weight:400;font-size:0.85rem;'>({año})</span></div>
+        <div class="poster-wrap">
+            <img src="{poster_url}" alt="{titulo_safe}">
+            <div class="poster-overlay">
+                <div class="poster-overlay-title">Sinopsis</div>
+                {sinopsis_safe}
+            </div>
+        </div>
+        <div class="slot-movie-title">{titulo_corto} {año_html}</div>
         <div><span class="slot-genre-badge">{genero}</span></div>
         <div class="slot-score-bar-wrap">
             <div class="slot-score-bar-fill" style="width:{pct}%"></div>
         </div>
         <div class="slot-score-label">Serendipity: {score:.2f}</div>
-        <div style="color:#ccc;font-size:0.78rem;margin-top:8px;text-align:left;">{overview_safe}</div>
     </div>
     """
 
 
 def render_tragaperras(id_usuario):
-    """Vista inmersiva de la tragaperras Joya Oculta."""
+    """Vista inmersiva de la Tragaperras Cinéfila."""
     st.markdown(_CSS_TRAGAPERRAS, unsafe_allow_html=True)
 
     # Cabecera
     st.markdown(
         """
         <div class="slot-header">
-            <div class="slot-title">🎰 JOYA OCULTA 🎰</div>
-            <div class="slot-subtitle">Descubre películas sorprendentes que quizás no conocías</div>
+            <div class="slot-filmstrip">
+                <div class="slot-filmstrip-bar"></div>
+                <div class="slot-title">🎥 TRAGAPERRAS CINÉFILA 🎥</div>
+                <div class="slot-filmstrip-bar"></div>
+            </div>
+            <div class="slot-subtitle">Gira los rodillos &mdash; el cine decide tu próxima película</div>
+            <div class="slot-divider"></div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -1364,37 +1556,73 @@ def render_tragaperras(id_usuario):
     # Cargar catálogo para enriquecer los resultados con poster/título/overview
     df_peliculas, _ = cargar_datos_catalogo()
 
-    # Si se pulsó TIRAR, llamar a la API
+    # Si se pulsó TIRAR, lanzar animación y llamar a la API
     if tirar:
-        st.session_state["serendipia_resultado"] = None  # reset para animar
-        with st.spinner("Buscando joyas ocultas..."):
-            try:
-                resp = requests.get(
-                    f"{API_BASE_URL}/api/serendipia/{id_usuario}", timeout=10
-                )
-                if resp.status_code == 200:
-                    st.session_state["serendipia_resultado"] = resp.json()
-                elif resp.status_code == 404:
-                    st.session_state["serendipia_resultado"] = {
-                        "error": resp.json().get(
-                            "detail", "No hay géneros favoritos registrados."
-                        )
-                    }
-                else:
-                    st.session_state["serendipia_resultado"] = {
-                        "error": f"Error del servidor ({resp.status_code}): {resp.json().get('detail', '')}"
-                    }
-            except requests.exceptions.RequestException:
-                st.session_state["serendipia_resultado"] = {
-                    "error": "No se pudo conectar con el backend. ¿Está en ejecución?"
+        st.session_state["serendipia_resultado"] = None
+        # Incrementar generación para forzar widgets de estrellas completamente nuevos
+        st.session_state["serendipia_gen"] = st.session_state.get("serendipia_gen", 0) + 1
+
+        anim_slot = st.empty()
+
+        # ── Fase 1: giro rápido inicial (antes de la petición) ──
+        for frame in range(15):
+            syms = [random.choice(_SLOT_SYMBOLS) for _ in range(3)]
+            anim_slot.markdown(
+                _html_tragaperras_frame(syms, "spinning"), unsafe_allow_html=True
+            )
+            time.sleep(0.07)
+
+        # ── Petición a la API ──
+        resultado_nuevo: dict = {}
+        try:
+            resp = requests.get(
+                f"{API_BASE_URL}/api/serendipia/{id_usuario}", timeout=10
+            )
+            if resp.status_code == 200:
+                resultado_nuevo = resp.json()
+            elif resp.status_code == 404:
+                resultado_nuevo = {
+                    "error": resp.json().get(
+                        "detail", "No hay géneros favoritos registrados."
+                    )
                 }
+            else:
+                resultado_nuevo = {
+                    "error": f"Error del servidor ({resp.status_code}): {resp.json().get('detail', '')}"
+                }
+        except requests.exceptions.RequestException:
+            resultado_nuevo = {
+                "error": "No se pudo conectar con el backend. ¿Está en ejecución?"
+            }
+
+        # ── Fase 2: desaceleración progresiva ──
+        for frame in range(10):
+            syms = [random.choice(_SLOT_SYMBOLS) for _ in range(3)]
+            anim_slot.markdown(
+                _html_tragaperras_frame(syms, "spinning"), unsafe_allow_html=True
+            )
+            time.sleep(0.10 + frame * 0.04)
+
+        # ── Fase 3: jackpot ──
+        anim_slot.markdown(
+            _html_tragaperras_frame(["💎", "🎰", "💎"], "jackpot"),
+            unsafe_allow_html=True,
+        )
+        time.sleep(1.1)
+        anim_slot.empty()
+
+        st.session_state["serendipia_resultado"] = resultado_nuevo
 
     # Mostrar resultado si existe
     resultado = st.session_state.get("serendipia_resultado")
     if resultado is None:
         st.markdown(
-            "<div style='text-align:center;color:#555;margin-top:40px;font-size:1.3rem;'>"
-            "Pulsa <b style='color:#FFD700;'>TIRAR</b> para descubrir tu próxima joya oculta"
+            "<div class='slot-waiting'>"
+            "<div style='font-size:4rem;margin-bottom:12px;'>🎰</div>"
+            "<div style='font-size:1.3rem;color:#888;'>"
+            "Pulsa <b style='color:#FFD700;letter-spacing:0.05em;'>TIRAR</b> y deja que el cine decida"
+            "</div>"
+            "<div style='color:#444;font-size:0.9rem;margin-top:8px;'>Joyas que el algoritmo ha seleccionado para ti</div>"
             "</div>",
             unsafe_allow_html=True,
         )
@@ -1408,15 +1636,20 @@ def render_tragaperras(id_usuario):
     generos_favoritos = resultado.get("generos_favoritos", [])
 
     if generos_favoritos:
+        chips_gen = " &nbsp;·&nbsp; ".join(
+            f'<b style="color:#FFD700;">{g}</b>' for g in generos_favoritos
+        )
         st.markdown(
-            f"<div style='text-align:center;color:#aaa;margin-bottom:16px;'>"
-            f"Basado en tus géneros favoritos: "
-            f"<b style='color:#FFD700;'>{' · '.join(generos_favoritos)}</b>"
+            f"<div class='slot-genres-bar'>"
+            f"🎥 Seleccionando entre tus géneros favoritos: {chips_gen}"
             f"</div>",
             unsafe_allow_html=True,
         )
 
     cols = st.columns(3)
+    # Cargar valoraciones una sola vez (fuera del bucle)
+    valoraciones_usuario = _cargar_valoraciones_usuario(id_usuario) if id_usuario and id_usuario != "?" else {}
+
     for idx, rec in enumerate(recomendaciones):
         movie_id = rec.get("movie_id")
         genero = rec.get("genre", "")
@@ -1452,11 +1685,10 @@ def render_tragaperras(id_usuario):
                 unsafe_allow_html=True,
             )
 
-            # Añadir selector de estrellas para la tragaperras
+            # Selector de estrellas para votar
             if movie_id and id_usuario and id_usuario != "?":
-                valoraciones = _cargar_valoraciones_usuario(id_usuario)
-                rating_actual = valoraciones.get(
-                    str(movie_id), valoraciones.get(movie_id, 0.0)
+                rating_actual = valoraciones_usuario.get(
+                    str(movie_id), valoraciones_usuario.get(movie_id, 0.0)
                 )
 
                 opciones = [0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0]
@@ -1483,7 +1715,7 @@ def render_tragaperras(id_usuario):
                     options=opciones,
                     format_func=lambda x: etiquetas[opciones.index(x)],
                     value=opciones[idx_init],
-                    key=f"slot_stars_{idx}",
+                    key=f"slot_stars_{st.session_state.get('serendipia_gen', 0)}_{idx}",
                     label_visibility="collapsed",
                 )
 
@@ -1498,6 +1730,14 @@ def render_tragaperras(id_usuario):
                             },
                             timeout=3,
                         )
+                        valoraciones_usuario[str(movie_id)] = nueva_nota
+                        valoraciones_usuario[movie_id] = nueva_nota
                         st.toast(f"{titulo}: {etiquetas[opciones.index(nueva_nota)]}")
                     except Exception:
                         pass
+
+            # Botón Info para abrir ficha completa
+            movie_id_int = int(movie_id) if movie_id and pd.notna(movie_id) else 0
+            if movie_id_int and id_usuario and id_usuario != "?":
+                if st.button("Info", key=f"slot_info_{idx}"):
+                    _mostrar_dialog_detalle(movie_id_int, id_usuario, valoraciones_usuario)

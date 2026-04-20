@@ -109,6 +109,10 @@ CREATE TABLE IF NOT EXISTS user_interests (
 -- BLOQUE 4: migration_user_v3.sql — Rol para control de acceso
 -- ============================================================
 
+-- Añadir columna sexo si no existe
+ALTER TABLE users
+    ADD COLUMN IF NOT EXISTS sexo ENUM('Hombre', 'Mujer', 'Otro') AFTER fecha_nacimiento;
+
 -- Añadir columna role si no existe
 ALTER TABLE users
     ADD COLUMN IF NOT EXISTS role ENUM('admin', 'user') NOT NULL DEFAULT 'user' AFTER sexo;

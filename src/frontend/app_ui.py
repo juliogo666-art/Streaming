@@ -374,7 +374,11 @@ if not st.session_state["autenticado"] and st.session_state["backend_listo"]:
                     )
 
                 st.write("---")
-                st.markdown("**¿Qué géneros te gusta ver?**")
+                st.markdown(
+                    "**¿Qué géneros te gusta ver?** "
+                    "<span style='color:#B8860B;font-size:0.88rem;'>(elige exactamente 3)</span>",
+                    unsafe_allow_html=True,
+                )
 
                 if not opciones_generos:
                     st.caption(
@@ -394,14 +398,37 @@ if not st.session_state["autenticado"] and st.session_state["backend_listo"]:
                         for i, genre_name in enumerate(row_genres):
                             cols[i].checkbox(genre_name, key=f"genre_{genre_name}")
 
-                btn_register = st.form_submit_button("REGISTRARSE AHORA")
+                col_reg, col_omitir = st.columns([3, 2])
+                with col_reg:
+                    btn_register = st.form_submit_button(
+                        "REGISTRARSE AHORA", use_container_width=True
+                    )
+                with col_omitir:
+                    btn_omitir = st.form_submit_button(
+                        "Omitir géneros →",
+                        use_container_width=True,
+                        help="Asigna automáticamente los 3 géneros más populares: Drama, Acción y Comedia.",
+                    )
 
-                if btn_register:
-                    gustos_actuales = [
-                        opciones_generos[name]
-                        for name in opciones_generos
-                        if st.session_state.get(f"genre_{name}")
-                    ]
+                # IDs de los 3 géneros más populares (Drama=18, Acción=28, Comedia=35)
+                _GENEROS_POPULARES_IDS = [18, 28, 35]
+
+                if btn_register or btn_omitir:
+                    if btn_omitir:
+                        # Usar los 3 géneros populares; si la API devolvió IDs distintos, adaptarse
+                        ids_disponibles = set(opciones_generos.values())
+                        gustos_actuales = [
+                            gid for gid in _GENEROS_POPULARES_IDS if gid in ids_disponibles
+                        ]
+                        # Fallback: tomar los primeros 3 de la lista si no coinciden
+                        if len(gustos_actuales) < 3:
+                            gustos_actuales = list(opciones_generos.values())[:3]
+                    else:
+                        gustos_actuales = [
+                            opciones_generos[name]
+                            for name in opciones_generos
+                            if st.session_state.get(f"genre_{name}")
+                        ]
 
                     if not new_username or not new_password or not new_email:
                         st.warning(
@@ -409,6 +436,12 @@ if not st.session_state["autenticado"] and st.session_state["backend_listo"]:
                         )
                     elif new_password != new_password_confirm:
                         st.error("Las contraseñas no coinciden.")
+                    elif btn_register and len(gustos_actuales) != 3:
+                        st.error(
+                            f"Debes seleccionar exactamente **3 géneros** "
+                            f"(tienes {len(gustos_actuales)} seleccionados). "
+                            "Si no sabes cuáles elegir, usa el botón «Omitir géneros»."
+                        )
                     else:
                         payload = {
                             "username": new_username,
@@ -426,12 +459,25 @@ if not st.session_state["autenticado"] and st.session_state["backend_listo"]:
                                 "http://127.0.0.1:8000/register", json=payload
                             )
                             if response.status_code == 200:
-                                st.success(
-                                    f"¡Bienvenido, {new_username}! Tu cuenta ha sido creada."
-                                )
-                                st.info(
-                                    "Ya puedes ir a la pestaña 'Iniciar Sesión' para entrar."
-                                )
+                                datos = response.json()
+                                user_info = datos.get("user")
+                                if user_info:
+                                    st.session_state["autenticado"] = True
+                                    st.session_state["usuario_actual"] = user_info
+                                    st.session_state["role"] = user_info.get(
+                                        "role", "user"
+                                    )
+                                    st.success(
+                                        f"¡Bienvenido, {new_username}! Entrando a SPIRE…"
+                                    )
+                                    st.rerun()
+                                else:
+                                    st.success(
+                                        f"¡Bienvenido, {new_username}! Tu cuenta ha sido creada."
+                                    )
+                                    st.info(
+                                        "Inicia sesión en la pestaña «Iniciar Sesión»."
+                                    )
                             else:
                                 error_detail = response.json().get(
                                     "detail", "Error desconocido"

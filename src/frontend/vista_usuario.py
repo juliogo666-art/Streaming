@@ -5,8 +5,12 @@ ha iniciado sesión. No incluye opciones de administración, centrándose
 exclusivamente en presentar recomendaciones personalizadas y el catálogo general.
 """
 
+import ast
 import os
+import random
+import re
 import time
+from textwrap import dedent
 import requests
 import pandas as pd
 import streamlit as st
@@ -149,6 +153,38 @@ _CSS_TARJETAS_INTERACTIVAS = """
 .movie-detail-row strong {
     color: #B8860B;
 }
+
+/* --- Cabecera de perfil: chips de gustos (ML o favoritos) --- */
+.profile-gustos-block {
+    margin-top: 10px;
+    text-align: center;
+}
+.profile-gustos-label {
+    color: #888;
+    font-size: 0.95rem;
+    margin-bottom: 8px;
+    letter-spacing: 0.02em;
+}
+.profile-gustos-wrap {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    align-items: center;
+    gap: 6px;
+    max-width: 100%;
+    line-height: 1.35;
+}
+.profile-gusto-chip {
+    display: inline-block;
+    background: rgba(184, 134, 11, 0.18);
+    border: 1px solid rgba(184, 134, 11, 0.45);
+    color: #e8e0d5;
+    border-radius: 14px;
+    padding: 4px 11px;
+    font-size: 0.82rem;
+    max-width: 100%;
+    word-break: break-word;
+}
 </style>
 """
 
@@ -198,27 +234,47 @@ def render():
         st.title(f"Bienvenido a SPIRE, {nombre_mostrar}!")
 
     with col_info:
-        # Etiqueta visual para identificar rápidamente quién está usando la aplicación
-        gustos_top3 = usuario.get("gustos_top3", [])
+        # Etiqueta visual: nombre, ID y gustos (ML o géneros elegidos en user_interests)
+        gustos_nombres = usuario.get("gustos_top3") or []
         gustos_source = usuario.get("gustos_source")
-        gustos_texto = ""
-        if gustos_source == "ml_inferred" and gustos_top3:
-            gustos_texto = " · ".join(gustos_top3[:4])
-        html_identidad = f"""
-            <div style="
-                background: rgba(0,31,63,0.6);
-                border: 1px solid #1a3a5f;
-                border-radius: 8px;
-                padding: 8px 16px;
-                margin-top: 18px;
-                text-align: center;
-            ">
-                <span style="color:#B8860B; font-weight:1200; font-size:1.8rem;">{nombre_mostrar}</span>
-                <span style="color:#aaa; font-size:1.2rem;"> · ID: {id_usuario}</span></br>
-                <span style="color:#aaa; font-size:1.2rem;"> · Tus gustos detectados (ML): {gustos_texto}</span>
+        nombre_safe = _escapar_html(str(nombre_mostrar))
+        id_safe = _escapar_html(str(id_usuario))
+
+        bloque_gustos = ""
+        if gustos_nombres and gustos_source in ("ml_inferred", "user_selected"):
+            etiqueta_gustos = (
+                "Tus gustos detectados (ML)"
+                if gustos_source == "ml_inferred"
+                else "Tus géneros favoritos"
+            )
+            etiqueta_safe = _escapar_html(etiqueta_gustos)
+            chips = "".join(
+                f'<span class="profile-gusto-chip">{_escapar_html(str(n))}</span>'
+                for n in gustos_nombres
+            )
+            # HTML compacto: st.markdown interpretaba líneas indentadas como bloques de código.
+            bloque_gustos = (
+                f'<div class="profile-gustos-block">'
+                f'<div class="profile-gustos-label">{etiqueta_safe}</div>'
+                f'<div class="profile-gustos-wrap">{chips}</div>'
+                f"</div>"
+            )
+
+        # st.html evita el parser Markdown (que mostraba las etiquetas como texto plano).
+        estilo_tarjeta = (
+            "background:rgba(0,31,63,0.6);border:1px solid #1a3a5f;"
+            "border-radius:8px;padding:8px 16px;margin-top:18px;text-align:center;"
+        )
+        html_identidad = dedent(
+            f"""
+            <div style="{estilo_tarjeta}">
+            <span style="color:#B8860B;font-weight:1200;font-size:1.8rem;">{nombre_safe}</span>
+            <span style="color:#aaa;font-size:1.2rem;"> · ID: {id_safe}</span><br>
+            {bloque_gustos}
             </div>
-        """
-        st.markdown(html_identidad, unsafe_allow_html=True)
+            """
+        ).strip()
+        st.html(html_identidad)
 
     with col_logout:
         st.write("")  # Espaciado para alinear verticalmente el botón
@@ -227,6 +283,8 @@ def render():
             st.session_state["autenticado"] = False
             st.session_state["usuario_actual"] = None
             st.session_state["role"] = None
+            st.session_state["vista_serendipia"] = False
+            st.session_state["serendipia_resultado"] = None
             st.rerun()
 
     # Routing: si el usuario activó la tragaperras, redirigir a esa vista
@@ -238,33 +296,42 @@ def render():
         "Descubre Películas y Series gracias a nuestro Recomendador de Inteligencia Artificial."
     )
 
-    # Botón de acceso a la tragaperras
+    # Botón de acceso a la tragaperras (solo si el usuario tiene géneros favoritos)
+    tiene_gustos = bool(usuario.get("gustos_top3"))
     col_btn_slot, _ = st.columns([2, 8])
     with col_btn_slot:
-        st.markdown(
-            """
-            <style>
-            div[data-testid="stButton"] button[kind="primary"] {
-                background: linear-gradient(135deg, #8B0000 0%, #B8860B 100%);
-                border: 2px solid #FFD700;
-                border-radius: 12px;
-                font-size: 1.15rem;
-                font-weight: 700;
-                letter-spacing: 0.05em;
-            }
-            </style>
-            """,
-            unsafe_allow_html=True,
-        )
-        if st.button(
-            "🎰  Joya Oculta",
-            key="btn_open_tragaperras",
-            type="primary",
-            use_container_width=True,
-        ):
-            st.session_state["vista_serendipia"] = True
-            st.session_state["serendipia_resultado"] = None
-            st.rerun()
+        if tiene_gustos:
+            st.markdown(
+                """
+                <style>
+                div[data-testid="stButton"] button[kind="primary"] {
+                    background: linear-gradient(135deg, #8B0000 0%, #B8860B 100%);
+                    border: 2px solid #FFD700;
+                    border-radius: 12px;
+                    font-size: 1.15rem;
+                    font-weight: 700;
+                    letter-spacing: 0.05em;
+                }
+                </style>
+                """,
+                unsafe_allow_html=True,
+            )
+            if st.button(
+                "🎰  Tragaperras Cinéfila",
+                key="btn_open_tragaperras",
+                type="primary",
+                use_container_width=True,
+            ):
+                st.session_state["vista_serendipia"] = True
+                st.session_state["serendipia_resultado"] = None
+                st.rerun()
+        else:
+            st.markdown(
+                "<div style='color:#555;font-size:0.82rem;margin-top:6px;line-height:1.4;'>"
+                "🎰 <i>Tragaperras Cinéfila disponible cuando tengas géneros favoritos asignados.</i>"
+                "</div>",
+                unsafe_allow_html=True,
+            )
 
     # 3. Barra de búsqueda general
     texto_busqueda = st.text_input("Busca por título...", key="input_busqueda_usuario")
@@ -281,7 +348,6 @@ def render():
     with pestana_peliculas:
         dibujar_contenido_pestana(
             dataframe=datos_peliculas,
-            termino_busqueda=texto_busqueda,
             es_pelicula=True,
             identificador_usuario=id_usuario,
             prefijo_clave_streamlit="usr_mov",
@@ -291,7 +357,6 @@ def render():
     with pestana_series:
         dibujar_contenido_pestana(
             dataframe=datos_series,
-            termino_busqueda=texto_busqueda,
             es_pelicula=False,
             identificador_usuario=id_usuario,
             prefijo_clave_streamlit="usr_tv",
@@ -375,6 +440,163 @@ def cargar_datos_catalogo():
             print(f"Error cargando series: {e}")
 
     return df_peliculas, df_series
+
+
+# Nombres de géneros TMDB (cine y TV) para mostrar y filtrar en la UI.
+TMDB_GENRE_NAMES = {
+    28: "Acción",
+    12: "Aventura",
+    16: "Animación",
+    35: "Comedia",
+    80: "Crimen",
+    99: "Documental",
+    18: "Drama",
+    10751: "Familia",
+    14: "Fantasía",
+    36: "Historia",
+    27: "Terror",
+    10402: "Música",
+    9648: "Misterio",
+    10749: "Romance",
+    878: "Ciencia ficción",
+    10770: "Película de TV",
+    53: "Suspense",
+    10752: "Bélica",
+    37: "Western",
+    10759: "Acción y aventura",
+    10762: "Infantil",
+    10763: "Noticias",
+    10764: "Reality",
+    10765: "Ciencia ficción y fantasía",
+    10766: "Telenovela",
+    10767: "Talk Show",
+    10768: "Guerra y política",
+}
+
+
+def parse_genre_ids(celda):
+    """Convierte el campo genre_ids del CSV (p. ej. '[27, 28]') en una lista de enteros."""
+    if celda is None or (isinstance(celda, float) and pd.isna(celda)):
+        return []
+    s = str(celda).strip()
+    if not s or s.lower() == "nan":
+        return []
+    try:
+        valor = ast.literal_eval(s)
+        if isinstance(valor, (list, tuple)):
+            return [int(x) for x in valor]
+    except (ValueError, SyntaxError, TypeError):
+        pass
+    return [int(x) for x in re.findall(r"\d+", s)]
+
+
+def ids_generos_presentes_en_catalogo(dataframe):
+    """Conjunto de IDs de género que aparecen al menos una vez en el catálogo."""
+    if dataframe.empty or "genre_ids" not in dataframe.columns:
+        return set()
+    ids = set()
+    for celda in dataframe["genre_ids"]:
+        ids.update(parse_genre_ids(celda))
+    return ids
+
+
+def _serie_anos_por_fila(dataframe, columna_fecha):
+    """
+    Año por fila para filtros y slider: usa ``ano`` cuando viene informado;
+    si no, el año de la fecha de estreno (evita datasets donde ``ano`` está casi vacío).
+    """
+    if dataframe.empty:
+        return pd.Series(dtype="Float64")
+    idx = dataframe.index
+    col = columna_fecha if columna_fecha in dataframe.columns else None
+    if col:
+        fechas = pd.to_datetime(dataframe[col], errors="coerce")
+        desde_fecha = fechas.dt.year.astype("Float64")
+    else:
+        desde_fecha = pd.Series([pd.NA] * len(dataframe), index=idx, dtype="Float64")
+    if "ano" in dataframe.columns:
+        y_ano = pd.to_numeric(dataframe["ano"], errors="coerce").astype("Float64")
+        return y_ano.where(y_ano.notna(), desde_fecha)
+    return desde_fecha
+
+
+def rango_anos_desde_catalogo(dataframe, columna_fecha):
+    """Devuelve (año_mín, año_máx) para el slider a partir del año efectivo por fila."""
+    if dataframe.empty:
+        return 1900, 2030
+    años = _serie_anos_por_fila(dataframe, columna_fecha).dropna()
+    if años.empty:
+        return 1900, 2030
+    return int(años.min()), int(años.max())
+
+
+def resolver_columna_fecha(dataframe, es_pelicula):
+    """Elige la columna de fecha más fiable según el dataset cargado."""
+    if not es_pelicula and "first_air_date" in dataframe.columns:
+        return "first_air_date"
+    if "fecha_estreno" in dataframe.columns:
+        return "fecha_estreno"
+    return "fecha_estreno"
+
+
+def serie_anos_para_filtro(dataframe, columna_fecha):
+    """Serie de años alineada al DataFrame (misma regla que el slider)."""
+    return _serie_anos_por_fila(dataframe, columna_fecha)
+
+
+def aplicar_criterios_busqueda_catalogo(
+    dataframe,
+    texto_titulo,
+    ids_genero,
+    año_min,
+    año_max,
+    aplicar_filtro_año,
+    modo_orden,
+    columna_fecha,
+):
+    """
+    Filtra el catálogo por título y/o géneros y/o rango de año, y ordena según modo_orden.
+    """
+    if modo_orden not in (None, "", "sin_seleccionar", "popular", "rating", "fecha"):
+        modo_orden = "sin_seleccionar"
+
+    out = dataframe
+    texto = (texto_titulo or "").strip()
+
+    if texto and "titulo" in out.columns:
+        out = out[out["titulo"].str.contains(texto, case=False, na=False, regex=False)]
+
+    if ids_genero and "genre_ids" in out.columns:
+        seleccion = set(ids_genero)
+
+        def coincide_generos(fila):
+            return not seleccion.isdisjoint(set(parse_genre_ids(fila.get("genre_ids"))))
+
+        mascara_gen = out.apply(coincide_generos, axis=1)
+        out = out[mascara_gen]
+
+    if aplicar_filtro_año:
+        años = serie_anos_para_filtro(out, columna_fecha)
+        mascara_año = años.notna() & (años >= año_min) & (años <= año_max)
+        out = out[mascara_año]
+
+    if out.empty:
+        return out
+
+    if modo_orden in (None, "", "sin_seleccionar"):
+        return out
+
+    if modo_orden == "popular" and "vote_count" in out.columns:
+        out = out.sort_values(by="vote_count", ascending=False)
+    elif modo_orden == "rating" and "vote_average" in out.columns:
+        out = out.sort_values(by="vote_average", ascending=False)
+    elif modo_orden == "fecha" and columna_fecha in out.columns:
+        fechas = pd.to_datetime(out[columna_fecha], errors="coerce")
+        out = out.assign(_ord_fecha=fechas).sort_values(
+            by="_ord_fecha", ascending=False, na_position="last"
+        )
+        out = out.drop(columns=["_ord_fecha"])
+    return out
 
 
 # ##############################################################################
@@ -831,7 +1053,6 @@ def solicitar_y_dibujar_recomendaciones(
 
 def dibujar_contenido_pestana(
     dataframe,
-    termino_busqueda,
     es_pelicula=True,
     identificador_usuario=None,
     prefijo_clave_streamlit="usr",
@@ -839,43 +1060,132 @@ def dibujar_contenido_pestana(
 ):
     """
     Estructura principal de visualización dentro de cada pestaña (Películas o Series).
-    Decide en qué orden pintar las secciones: Resultados de búsqueda, Recomendaciones, Top y Populares.
+    Incluye un formulario con botón «Buscar»: solo ejecuta consulta si hay título o filtros;
+    con una búsqueda activa muestra únicamente resultados hasta que se pulse «Limpiar».
     """
     if valoraciones_usuario is None:
         valoraciones_usuario = {}
 
     # Determinamos prefijos y nombres de columnas base según si es película o serie
     prefijo_tipo = f"{prefijo_clave_streamlit}_{'mov' if es_pelicula else 'tv'}"
-    columna_fecha = "fecha_estreno" if es_pelicula else "first_air_date"
+    columna_fecha = resolver_columna_fecha(dataframe, es_pelicula)
+    clave_busqueda_catalogo = f"{prefijo_clave_streamlit}_catalogo_busqueda"
 
-    # --- FLUJO DE BÚSQUEDA ---
-    # Si el usuario escribió algo, solo mostramos resultados que coincidan
-    if termino_busqueda:
-        st.subheader(f"Resultados de búsqueda para: '{termino_busqueda}'")
+    año_min_cat, año_max_cat = rango_anos_desde_catalogo(dataframe, columna_fecha)
+    ids_cat = sorted(ids_generos_presentes_en_catalogo(dataframe))
+    etiquetas_genero = [
+        TMDB_GENRE_NAMES.get(i, f"Género ({i})") for i in ids_cat
+    ]
+    mapa_etiqueta_a_id = dict(zip(etiquetas_genero, ids_cat))
 
-        if not dataframe.empty and "titulo" in dataframe.columns:
-            # Filtramos de forma insensible a mayúsculas/minúsculas usando regex
-            mascara = dataframe["titulo"].str.contains(
-                termino_busqueda, case=False, na=False
+    with st.form(f"form_buscar_catalogo_{prefijo_tipo}"):
+        with st.expander("Filtros y búsqueda del catálogo", expanded=False):
+            texto_titulo = st.text_input(
+                "Título (opcional)",
+                placeholder="Buscar por nombre…",
+                key=f"{prefijo_tipo}_input_titulo",
             )
-            resultados_filtrados = dataframe[mascara]
-
-            if not resultados_filtrados.empty:
-                dibujar_tarjetas_contenido(
-                    dataframe=resultados_filtrados,
-                    limite_mostrar=12,
-                    prefijo_clave=f"{prefijo_tipo}_search",
-                    columna_fecha=columna_fecha,
-                    id_usuario=identificador_usuario,
-                    valoraciones_usuario=valoraciones_usuario,
-                )
+            generos_elegidos = st.multiselect(
+                "Géneros",
+                options=etiquetas_genero,
+                default=[],
+                key=f"{prefijo_tipo}_multiselect_generos",
+            )
+            filtro_por_año_posible = True
+            if año_min_cat >= año_max_cat:
+                st.caption(f"Todo el catálogo corresponde al año **{año_min_cat}**.")
+                rango_año = (año_min_cat, año_max_cat)
+                filtro_por_año_posible = False
             else:
-                st.info("No se encontraron coincidencias para tu búsqueda.")
-        else:
-            st.info("El catálogo no está disponible para realizar la búsqueda.")
-        return  # Termina temprano: si hay búsqueda no mostramos las secciones por defecto
+                rango_año = st.slider(
+                    "Año de estreno",
+                    min_value=año_min_cat,
+                    max_value=año_max_cat,
+                    value=(año_min_cat, año_max_cat),
+                    key=f"{prefijo_tipo}_slider_anio",
+                )
+            modo_orden = st.selectbox(
+                "Ordenar resultados por",
+                options=["sin_seleccionar", "popular", "rating", "fecha"],
+                index=0,
+                format_func=lambda v: {
+                    "sin_seleccionar": "Sin seleccionar",
+                    "popular": "Más populares (votos)",
+                    "rating": "Mejor valoradas",
+                    "fecha": "Fecha (más recientes)",
+                }[v],
+                help=(
+                    "Por defecto «Sin seleccionar» mantiene el orden original del catálogo "
+                    "después de filtrar."
+                ),
+                key=f"{prefijo_tipo}_select_orden",
+            )
+            col_buscar, col_limpiar = st.columns(2)
+            with col_buscar:
+                pulsado_buscar = st.form_submit_button("Buscar")
+            with col_limpiar:
+                pulsado_limpiar = st.form_submit_button("Limpiar")
 
-    # --- FLUJO NORMAL (Sin búsqueda activa) ---
+    if pulsado_limpiar:
+        st.session_state[clave_busqueda_catalogo] = None
+
+    if pulsado_buscar:
+        texto_limpio = (texto_titulo or "").strip()
+        ids_genero = [mapa_etiqueta_a_id[g] for g in generos_elegidos if g in mapa_etiqueta_a_id]
+        año_lo, año_hi = rango_año
+        filtro_año_activo = filtro_por_año_posible and (año_lo, año_hi) != (
+            año_min_cat,
+            año_max_cat,
+        )
+        tiene_criterio = bool(texto_limpio) or bool(ids_genero) or filtro_año_activo
+
+        if not tiene_criterio:
+            st.session_state[clave_busqueda_catalogo] = None
+            st.info(
+                "Escribe un título o selecciona al menos un filtro (género o rango de años distinto al completo) para buscar."
+            )
+        else:
+            st.session_state[clave_busqueda_catalogo] = {
+                "texto": texto_limpio,
+                "ids_genero": ids_genero,
+                "año_min": int(año_lo),
+                "año_max": int(año_hi),
+                "aplicar_filtro_año": filtro_año_activo,
+                "orden": modo_orden,
+            }
+
+    criterios = st.session_state.get(clave_busqueda_catalogo)
+
+    if criterios:
+        st.subheader("Resultados de búsqueda")
+
+        if dataframe.empty or "titulo" not in dataframe.columns:
+            st.info("El catálogo no está disponible para realizar la búsqueda.")
+            return
+
+        resultados = aplicar_criterios_busqueda_catalogo(
+            dataframe,
+            texto_titulo=criterios.get("texto", ""),
+            ids_genero=criterios.get("ids_genero") or [],
+            año_min=criterios.get("año_min", año_min_cat),
+            año_max=criterios.get("año_max", año_max_cat),
+            aplicar_filtro_año=criterios.get("aplicar_filtro_año", False),
+            modo_orden=criterios.get("orden", "sin_seleccionar"),
+            columna_fecha=columna_fecha,
+        )
+
+        if resultados.empty:
+            st.info("No se encontraron coincidencias con los criterios indicados.")
+        else:
+            dibujar_tarjetas_contenido(
+                dataframe=resultados,
+                limite_mostrar=30,
+                prefijo_clave=f"{prefijo_tipo}_search",
+                columna_fecha=columna_fecha,
+            )
+        return
+
+    # --- FLUJO NORMAL (Sin búsqueda activa en catálogo) ---
 
     # Sección 1: Recomendaciones Personalizadas (IA)
     st.subheader("Recomendado para ti")
@@ -934,72 +1244,236 @@ def dibujar_contenido_pestana(
 
 
 # ##############################################################################
-#  Vista Tragaperras — Joya Oculta (Serendipia)
+#  Vista Tragaperras Cinéfila (Serendipia)
 # ##############################################################################
+
+# Símbolos para la animación de tragaperras
+_SLOT_SYMBOLS = ["🎬", "🎭", "🎪", "🎨", "🎥", "🎞️", "⭐", "🔮", "🎯", "🌟", "💫", "✨", "🏆", "🎖️"]
+
+
+def _html_tragaperras_frame(simbolos: list, fase: str = "spinning") -> str:
+    """Genera el HTML de un frame de animación de la tragaperras."""
+    es_jackpot = fase == "jackpot"
+
+    if es_jackpot:
+        border_color = "#FFD700"
+        glow_css = "box-shadow: 0 0 40px #FFD700, 0 0 80px rgba(255,165,0,0.6), inset 0 0 20px rgba(255,215,0,0.1);"
+        label = "🎥 ¡¡PELICÍCULA ENCONTRADA!! 🎥"
+        label_color = "#FFD700"
+        reel_bg = "rgba(40,25,0,0.95)"
+        sym_style = "filter: drop-shadow(0 0 8px #FFD700);"
+    else:
+        border_color = "#4a3500"
+        glow_css = "box-shadow: 0 4px 24px rgba(0,0,0,0.7);"
+        label = "🎰  Girando los rodillos..."
+        label_color = "#666"
+        reel_bg = "rgba(0,10,25,0.95)"
+        sym_style = ""
+
+    # Perforaciones laterales estilo carrete de cine
+    sprockets = "".join(
+        '<div style="width:16px;height:22px;border-radius:4px;background:#111;margin:5px 0;"></div>'
+        for _ in range(4)
+    )
+    sprocket_strip = (
+        f'<div style="display:flex;flex-direction:column;align-items:center;'
+        f'background:#1a1a1a;padding:8px 6px;border-radius:6px;">{sprockets}</div>'
+    )
+
+    reels = "".join(
+        f'<div style="background:{reel_bg};border:3px solid {border_color};'
+        f'border-radius:12px;padding:20px 24px;font-size:3.6rem;text-align:center;'
+        f'min-width:100px;{glow_css};{sym_style}">{s}</div>'
+        for s in simbolos
+    )
+
+    machine_frame = (
+        f'<div style="background:linear-gradient(180deg,#1a0a00 0%,#0d0500 100%);'
+        f'border:3px solid #3a2200;border-radius:20px;padding:24px 28px;'
+        f'display:inline-block;box-shadow:0 8px 40px rgba(0,0,0,0.8),inset 0 1px 0 rgba(255,200,0,0.15);">'
+        f'<div style="display:flex;align-items:center;gap:14px;">'
+        f'{sprocket_strip}'
+        f'<div style="display:flex;gap:14px;">{reels}</div>'
+        f'{sprocket_strip}'
+        f'</div>'
+        f'</div>'
+    )
+
+    return (
+        f'<div style="text-align:center;padding:28px 0;">'
+        f'<div style="font-size:1.1rem;color:{label_color};margin-bottom:20px;'
+        f'font-weight:700;letter-spacing:0.12em;text-transform:uppercase;">{label}</div>'
+        f'{machine_frame}'
+        f'</div>'
+    )
 
 
 _CSS_TRAGAPERRAS = """
 <style>
+/* ====== CONTENEDOR GENERAL DE LA TRAGAPERRAS ====== */
+.slot-page-wrap {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 0 12px;
+}
+
+/* ====== CABECERA CON TIRA DE CINE ====== */
 .slot-header {
     text-align: center;
-    padding: 24px 0 8px 0;
+    padding: 32px 0 12px 0;
+    position: relative;
+}
+.slot-filmstrip {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    margin-bottom: 18px;
+}
+.slot-filmstrip-bar {
+    flex: 1;
+    height: 28px;
+    background: repeating-linear-gradient(
+        90deg,
+        #1a1a1a 0px, #1a1a1a 16px,
+        #2a2a2a 16px, #2a2a2a 18px,
+        #1a1a1a 18px, #1a1a1a 34px
+    );
+    border-radius: 4px;
+    position: relative;
+    overflow: hidden;
+    max-width: 180px;
+}
+.slot-filmstrip-bar::before, .slot-filmstrip-bar::after {
+    content: '';
+    position: absolute;
+    top: 3px;
+    bottom: 3px;
+    left: 0;
+    right: 0;
+    background: repeating-linear-gradient(
+        90deg,
+        transparent 0px, transparent 10px,
+        rgba(255,215,0,0.12) 10px, rgba(255,215,0,0.12) 12px
+    );
 }
 .slot-title {
-    font-size: 3rem;
+    font-size: 3.2rem;
     font-weight: 900;
-    background: linear-gradient(90deg, #FFD700, #FF8C00, #FFD700);
+    background: linear-gradient(90deg, #FFD700 0%, #FF8C00 30%, #FFF176 50%, #FF8C00 70%, #FFD700 100%);
+    background-size: 200% auto;
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
-    letter-spacing: 0.08em;
+    letter-spacing: 0.06em;
     text-shadow: none;
+    line-height: 1.1;
+    animation: shimmer-title 3s linear infinite;
+}
+@keyframes shimmer-title {
+    0%   { background-position: 0% center; }
+    100% { background-position: 200% center; }
 }
 .slot-subtitle {
-    color: #aaa;
-    font-size: 1.1rem;
-    margin-top: 4px;
+    color: #888;
+    font-size: 1.05rem;
+    margin-top: 8px;
+    letter-spacing: 0.04em;
 }
+.slot-divider {
+    height: 2px;
+    margin: 18px auto;
+    max-width: 600px;
+    background: linear-gradient(90deg, transparent, #B8860B 20%, #FFD700 50%, #B8860B 80%, transparent);
+    border-radius: 2px;
+}
+
+/* ====== TARJETA DE PELÍCULA ====== */
 .slot-card {
-    background: rgba(0, 20, 45, 0.85);
-    border: 2px solid #B8860B;
-    border-radius: 16px;
-    padding: 18px 14px 14px 14px;
+    background: linear-gradient(160deg, rgba(10,25,55,0.95) 0%, rgba(0,12,30,0.98) 100%);
+    border: 1px solid rgba(184,134,11,0.5);
+    border-radius: 18px;
+    padding: 14px 14px 16px 14px;
     text-align: center;
-    height: 100%;
+    transition: transform 0.28s ease, box-shadow 0.28s ease, border-color 0.28s ease;
+    position: relative;
+    overflow: hidden;
 }
-.slot-card img { border-radius: 8px; }
+.slot-card::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(135deg, rgba(255,215,0,0.04) 0%, transparent 60%);
+    border-radius: 18px;
+    pointer-events: none;
+}
+.slot-card:hover {
+    transform: translateY(-6px) scale(1.02);
+    box-shadow: 0 12px 40px rgba(184,134,11,0.3), 0 0 0 1px rgba(255,215,0,0.25);
+    border-color: rgba(255,215,0,0.6);
+}
 .slot-movie-title {
     color: #FFD700;
     font-weight: 700;
-    font-size: 1rem;
-    margin-top: 10px;
-    min-height: 2.4em;
+    font-size: 0.95rem;
+    margin-top: 12px;
+    min-height: 2.6em;
+    line-height: 1.3;
 }
 .slot-genre-badge {
     display: inline-block;
-    background: rgba(184, 134, 11, 0.25);
-    border: 1px solid #B8860B;
+    background: linear-gradient(90deg, rgba(139,0,0,0.35), rgba(184,134,11,0.35));
+    border: 1px solid rgba(184,134,11,0.7);
     color: #FFD700;
     border-radius: 20px;
-    padding: 2px 12px;
-    font-size: 0.8rem;
-    margin-top: 6px;
+    padding: 3px 14px;
+    font-size: 0.78rem;
+    margin-top: 8px;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    font-weight: 600;
 }
 .slot-score-bar-wrap {
-    background: rgba(255,255,255,0.08);
-    border-radius: 8px;
-    height: 8px;
-    margin-top: 10px;
+    background: rgba(255,255,255,0.07);
+    border-radius: 10px;
+    height: 6px;
+    margin-top: 12px;
     overflow: hidden;
 }
 .slot-score-bar-fill {
-    height: 8px;
-    border-radius: 8px;
-    background: linear-gradient(90deg, #B8860B, #FFD700);
+    height: 6px;
+    border-radius: 10px;
+    background: linear-gradient(90deg, #8B0000, #B8860B, #FFD700);
+    box-shadow: 0 0 6px rgba(255,215,0,0.4);
 }
 .slot-score-label {
+    color: #666;
+    font-size: 0.72rem;
+    margin-top: 5px;
+    letter-spacing: 0.03em;
+}
+
+/* ====== ZONA DE ESPERA (antes de tirar) ====== */
+.slot-waiting {
+    text-align: center;
+    margin-top: 60px;
+    animation: pulse-wait 2.5s ease-in-out infinite;
+}
+@keyframes pulse-wait {
+    0%, 100% { opacity: 0.6; }
+    50%       { opacity: 1;   }
+}
+
+/* ====== GÉNEROS FAVORITOS ====== */
+.slot-genres-bar {
+    text-align: center;
+    margin: 0 auto 24px auto;
+    padding: 10px 20px;
+    background: rgba(0,15,35,0.6);
+    border: 1px solid rgba(184,134,11,0.25);
+    border-radius: 30px;
+    max-width: 700px;
     color: #aaa;
-    font-size: 0.75rem;
-    margin-top: 4px;
+    font-size: 0.9rem;
 }
 </style>
 """
@@ -1008,36 +1482,52 @@ _CSS_TRAGAPERRAS = """
 def _tarjeta_serendipia_html(
     titulo: str, poster_url: str, genero: str, score: float, overview: str, año: str
 ) -> str:
-    """Genera el HTML de una tarjeta de película para la tragaperras."""
+    """Genera el HTML de una tarjeta de película para la tragaperras con hover overlay de sinopsis."""
     pct = int(score * 100)
-    titulo_safe = titulo[:35] + "..." if len(titulo) > 35 else titulo
-    overview_safe = (
-        overview[:120] + "..." if overview and len(overview) > 120 else (overview or "")
+    titulo_corto = titulo[:35] + "..." if len(titulo) > 35 else titulo
+    titulo_safe = _escapar_html(titulo)
+    sinopsis_safe = _escapar_html(
+        overview[:300] + "..." if overview and len(overview) > 300 else (overview or "Sin sinopsis disponible.")
+    )
+    año_html = (
+        f"<span style='color:#aaa;font-weight:400;font-size:0.85rem;'>({año})</span>"
+        if año
+        else ""
     )
     return f"""
     <div class="slot-card">
-        <img src="{poster_url}" width="100%" style="border-radius:8px;">
-        <div class="slot-movie-title">{titulo_safe} <span style='color:#aaa;font-weight:400;font-size:0.85rem;'>({año})</span></div>
+        <div class="poster-wrap">
+            <img src="{poster_url}" alt="{titulo_safe}">
+            <div class="poster-overlay">
+                <div class="poster-overlay-title">Sinopsis</div>
+                {sinopsis_safe}
+            </div>
+        </div>
+        <div class="slot-movie-title">{titulo_corto} {año_html}</div>
         <div><span class="slot-genre-badge">{genero}</span></div>
         <div class="slot-score-bar-wrap">
             <div class="slot-score-bar-fill" style="width:{pct}%"></div>
         </div>
         <div class="slot-score-label">Serendipity: {score:.2f}</div>
-        <div style="color:#ccc;font-size:0.78rem;margin-top:8px;text-align:left;">{overview_safe}</div>
     </div>
     """
 
 
 def render_tragaperras(id_usuario):
-    """Vista inmersiva de la tragaperras Joya Oculta."""
+    """Vista inmersiva de la Tragaperras Cinéfila."""
     st.markdown(_CSS_TRAGAPERRAS, unsafe_allow_html=True)
 
     # Cabecera
     st.markdown(
         """
         <div class="slot-header">
-            <div class="slot-title">🎰 JOYA OCULTA 🎰</div>
-            <div class="slot-subtitle">Descubre películas sorprendentes que quizás no conocías</div>
+            <div class="slot-filmstrip">
+                <div class="slot-filmstrip-bar"></div>
+                <div class="slot-title">🎥 TRAGAPERRAS CINÉFILA 🎥</div>
+                <div class="slot-filmstrip-bar"></div>
+            </div>
+            <div class="slot-subtitle">Gira los rodillos &mdash; el cine decide tu próxima película</div>
+            <div class="slot-divider"></div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -1066,37 +1556,73 @@ def render_tragaperras(id_usuario):
     # Cargar catálogo para enriquecer los resultados con poster/título/overview
     df_peliculas, _ = cargar_datos_catalogo()
 
-    # Si se pulsó TIRAR, llamar a la API
+    # Si se pulsó TIRAR, lanzar animación y llamar a la API
     if tirar:
-        st.session_state["serendipia_resultado"] = None  # reset para animar
-        with st.spinner("Buscando joyas ocultas..."):
-            try:
-                resp = requests.get(
-                    f"{API_BASE_URL}/api/serendipia/{id_usuario}", timeout=10
-                )
-                if resp.status_code == 200:
-                    st.session_state["serendipia_resultado"] = resp.json()
-                elif resp.status_code == 404:
-                    st.session_state["serendipia_resultado"] = {
-                        "error": resp.json().get(
-                            "detail", "No hay géneros favoritos registrados."
-                        )
-                    }
-                else:
-                    st.session_state["serendipia_resultado"] = {
-                        "error": f"Error del servidor ({resp.status_code}): {resp.json().get('detail', '')}"
-                    }
-            except requests.exceptions.RequestException:
-                st.session_state["serendipia_resultado"] = {
-                    "error": "No se pudo conectar con el backend. ¿Está en ejecución?"
+        st.session_state["serendipia_resultado"] = None
+        # Incrementar generación para forzar widgets de estrellas completamente nuevos
+        st.session_state["serendipia_gen"] = st.session_state.get("serendipia_gen", 0) + 1
+
+        anim_slot = st.empty()
+
+        # ── Fase 1: giro rápido inicial (antes de la petición) ──
+        for frame in range(15):
+            syms = [random.choice(_SLOT_SYMBOLS) for _ in range(3)]
+            anim_slot.markdown(
+                _html_tragaperras_frame(syms, "spinning"), unsafe_allow_html=True
+            )
+            time.sleep(0.07)
+
+        # ── Petición a la API ──
+        resultado_nuevo: dict = {}
+        try:
+            resp = requests.get(
+                f"{API_BASE_URL}/api/serendipia/{id_usuario}", timeout=10
+            )
+            if resp.status_code == 200:
+                resultado_nuevo = resp.json()
+            elif resp.status_code == 404:
+                resultado_nuevo = {
+                    "error": resp.json().get(
+                        "detail", "No hay géneros favoritos registrados."
+                    )
                 }
+            else:
+                resultado_nuevo = {
+                    "error": f"Error del servidor ({resp.status_code}): {resp.json().get('detail', '')}"
+                }
+        except requests.exceptions.RequestException:
+            resultado_nuevo = {
+                "error": "No se pudo conectar con el backend. ¿Está en ejecución?"
+            }
+
+        # ── Fase 2: desaceleración progresiva ──
+        for frame in range(10):
+            syms = [random.choice(_SLOT_SYMBOLS) for _ in range(3)]
+            anim_slot.markdown(
+                _html_tragaperras_frame(syms, "spinning"), unsafe_allow_html=True
+            )
+            time.sleep(0.10 + frame * 0.04)
+
+        # ── Fase 3: jackpot ──
+        anim_slot.markdown(
+            _html_tragaperras_frame(["💎", "🎰", "💎"], "jackpot"),
+            unsafe_allow_html=True,
+        )
+        time.sleep(1.1)
+        anim_slot.empty()
+
+        st.session_state["serendipia_resultado"] = resultado_nuevo
 
     # Mostrar resultado si existe
     resultado = st.session_state.get("serendipia_resultado")
     if resultado is None:
         st.markdown(
-            "<div style='text-align:center;color:#555;margin-top:40px;font-size:1.3rem;'>"
-            "Pulsa <b style='color:#FFD700;'>TIRAR</b> para descubrir tu próxima joya oculta"
+            "<div class='slot-waiting'>"
+            "<div style='font-size:4rem;margin-bottom:12px;'>🎰</div>"
+            "<div style='font-size:1.3rem;color:#888;'>"
+            "Pulsa <b style='color:#FFD700;letter-spacing:0.05em;'>TIRAR</b> y deja que el cine decida"
+            "</div>"
+            "<div style='color:#444;font-size:0.9rem;margin-top:8px;'>Joyas que el algoritmo ha seleccionado para ti</div>"
             "</div>",
             unsafe_allow_html=True,
         )
@@ -1110,15 +1636,20 @@ def render_tragaperras(id_usuario):
     generos_favoritos = resultado.get("generos_favoritos", [])
 
     if generos_favoritos:
+        chips_gen = " &nbsp;·&nbsp; ".join(
+            f'<b style="color:#FFD700;">{g}</b>' for g in generos_favoritos
+        )
         st.markdown(
-            f"<div style='text-align:center;color:#aaa;margin-bottom:16px;'>"
-            f"Basado en tus géneros favoritos: "
-            f"<b style='color:#FFD700;'>{' · '.join(generos_favoritos)}</b>"
+            f"<div class='slot-genres-bar'>"
+            f"🎥 Seleccionando entre tus géneros favoritos: {chips_gen}"
             f"</div>",
             unsafe_allow_html=True,
         )
 
     cols = st.columns(3)
+    # Cargar valoraciones una sola vez (fuera del bucle)
+    valoraciones_usuario = _cargar_valoraciones_usuario(id_usuario) if id_usuario and id_usuario != "?" else {}
+
     for idx, rec in enumerate(recomendaciones):
         movie_id = rec.get("movie_id")
         genero = rec.get("genre", "")
@@ -1154,11 +1685,10 @@ def render_tragaperras(id_usuario):
                 unsafe_allow_html=True,
             )
 
-            # Añadir selector de estrellas para la tragaperras
+            # Selector de estrellas para votar
             if movie_id and id_usuario and id_usuario != "?":
-                valoraciones = _cargar_valoraciones_usuario(id_usuario)
-                rating_actual = valoraciones.get(
-                    str(movie_id), valoraciones.get(movie_id, 0.0)
+                rating_actual = valoraciones_usuario.get(
+                    str(movie_id), valoraciones_usuario.get(movie_id, 0.0)
                 )
 
                 opciones = [0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0]
@@ -1185,7 +1715,7 @@ def render_tragaperras(id_usuario):
                     options=opciones,
                     format_func=lambda x: etiquetas[opciones.index(x)],
                     value=opciones[idx_init],
-                    key=f"slot_stars_{idx}",
+                    key=f"slot_stars_{st.session_state.get('serendipia_gen', 0)}_{idx}",
                     label_visibility="collapsed",
                 )
 
@@ -1200,6 +1730,14 @@ def render_tragaperras(id_usuario):
                             },
                             timeout=3,
                         )
+                        valoraciones_usuario[str(movie_id)] = nueva_nota
+                        valoraciones_usuario[movie_id] = nueva_nota
                         st.toast(f"{titulo}: {etiquetas[opciones.index(nueva_nota)]}")
                     except Exception:
                         pass
+
+            # Botón Info para abrir ficha completa
+            movie_id_int = int(movie_id) if movie_id and pd.notna(movie_id) else 0
+            if movie_id_int and id_usuario and id_usuario != "?":
+                if st.button("Info", key=f"slot_info_{idx}"):
+                    _mostrar_dialog_detalle(movie_id_int, id_usuario, valoraciones_usuario)

@@ -49,6 +49,7 @@ class RecommendationLogger:
         user_id: str,
         modelo: str,
         recomendaciones_top_n: list,
+        tiempo_recomendacion_ms: float | None = None,
     ) -> None:
         """
         Guarda la información de la recomendación en un archivo JSONL.
@@ -69,6 +70,10 @@ class RecommendationLogger:
             "items_recommended": recomendaciones_top_n,
             "timestamp": datetime.utcnow().isoformat(),
         }
+        if tiempo_recomendacion_ms is not None:
+            tiempo_ms = float(tiempo_recomendacion_ms)
+            record["tiempo_recomendacion_ms"] = tiempo_ms
+            record["tiempo_recomendacion_s"] = round(tiempo_ms / 1000.0, 4)
 
         self._write(record)
 

@@ -245,6 +245,19 @@ app = FastAPI(lifespan=lifespan)
 telemetria = RecommendationLogger()
 
 
+def _log_recomendacion_con_tiempo(
+    user_id: int, modelo: str, recomendaciones_top_n: list, inicio: float
+) -> None:
+    """Registra telemetría de recomendación junto con su tiempo de respuesta."""
+    tiempo_ms = round((time.perf_counter() - inicio) * 1000, 2)
+    telemetria.log_recommendations(
+        str(user_id),
+        modelo,
+        recomendaciones_top_n,
+        tiempo_recomendacion_ms=tiempo_ms,
+    )
+
+
 @app.get("/status")
 def check_status():
     return {"status": "Backend funcionando correctamente"}
@@ -311,6 +324,43 @@ def importar_datos():
 # LoginRequest y RegisterRequest importados de src.schemas.schemas
 
 
+def _adjuntar_gustos_perfil(cursor, usuario: dict) -> None:
+    """Rellena gustos_top3 y gustos_source (prioridad ML; si no hay, user_selected)."""
+    uid = usuario["id_usuario"]
+    cursor.execute(
+        """
+        SELECT g.id, g.name
+        FROM user_interests ui
+        JOIN genres g ON g.id = ui.genre_id
+        WHERE ui.id_usuario = %s
+          AND ui.source = 'ml_inferred'
+        ORDER BY g.name ASC
+        LIMIT 3
+        """,
+        (uid,),
+    )
+    gustos_ml = cursor.fetchall()
+    if gustos_ml:
+        usuario["gustos_top3"] = [row["name"] for row in gustos_ml]
+        usuario["gustos_source"] = "ml_inferred"
+        return
+    cursor.execute(
+        """
+        SELECT g.id, g.name
+        FROM user_interests ui
+        JOIN genres g ON g.id = ui.genre_id
+        WHERE ui.id_usuario = %s
+          AND (ui.source = 'user_selected' OR ui.source IS NULL)
+        ORDER BY g.name ASC
+        """,
+        (uid,),
+    )
+    gustos_sel = cursor.fetchall()
+    if gustos_sel:
+        usuario["gustos_top3"] = [row["name"] for row in gustos_sel]
+        usuario["gustos_source"] = "user_selected"
+
+
 @app.post("/login")
 def login(datos: LoginRequest):
     conn = get_db_connection()
@@ -337,24 +387,7 @@ def login(datos: LoginRequest):
                 es_valido = datos.password == hash_guardado
 
             if es_valido:
-                # Si el usuario tiene intereses inferidos por ML, devolvemos top-3 gustos.
-                # Esto permite al frontend mostrarlos de forma contextual tras el login.
-                cursor.execute(
-                    """
-                    SELECT g.id, g.name
-                    FROM user_interests ui
-                    JOIN genres g ON g.id = ui.genre_id
-                    WHERE ui.id_usuario = %s
-                      AND ui.source = 'ml_inferred'
-                    ORDER BY g.name ASC
-                    LIMIT 3
-                    """,
-                    (usuario["id_usuario"],),
-                )
-                gustos_ml = cursor.fetchall()
-                if gustos_ml:
-                    usuario["gustos_top3"] = [row["name"] for row in gustos_ml]
-                    usuario["gustos_source"] = "ml_inferred"
+                _adjuntar_gustos_perfil(cursor, usuario)
 
                 # Por seguridad, borramos la contraseña del diccionario temporal antes de mandarlo al frontend
                 del usuario["passwd"]
@@ -445,19 +478,33 @@ def register(datos: RegisterRequest):
             res_pop = cursor.fetchall()
             intereses = [row["genre_id"] for row in res_pop]
 
-        # Insertar intereses
+        # Insertar intereses (origen: selección en el registro)
         if intereses:
-            query_int = (
-                "INSERT INTO user_interests (id_usuario, genre_id) VALUES (%s, %s)"
-            )
+            query_int = """
+                INSERT INTO user_interests (id_usuario, genre_id, source)
+                VALUES (%s, %s, 'user_selected')
+            """
             for g_id in intereses:
                 cursor.execute(query_int, (id_usuario, g_id))
 
         conn.commit()
+
+        cursor.execute(
+            "SELECT id_usuario, username, email, role FROM users WHERE id_usuario = %s",
+            (id_usuario,),
+        )
+        usuario_resp = cursor.fetchone()
+        if not usuario_resp:
+            raise HTTPException(
+                status_code=500, detail="Usuario creado pero no se pudo leer el perfil."
+            )
+        _adjuntar_gustos_perfil(cursor, usuario_resp)
+
         return {
             "status": "success",
             "message": "Usuario registrado correctamente",
             "user_id": id_usuario,
+            "user": usuario_resp,
         }
 
     except Exception as e:
@@ -477,6 +524,7 @@ def recomendar_peliculas(user_id: int, n: int = 10):
     Endpoint que devuelve las top-N películas recomendadas para un usuario.
     Usa el modelo SVD entrenado para predecir ratings de películas no vistas.
     """
+    t_inicio = time.perf_counter()
     print(f"DEBUG: Petición SVD para User {user_id}")
 
     # --- DIAGNÓSTICO EN TIEMPO DE EJECUCIÓN ---
@@ -528,7 +576,7 @@ def recomendar_peliculas(user_id: int, n: int = 10):
     enriquecer_recomendaciones(top_n)
 
     # Telemetría: Registra un evento en disco de la recomendación servida
-    telemetria.log_recommendations(str(user_id), "SVD (Surprise)", top_n)
+    _log_recomendacion_con_tiempo(user_id, "SVD (Surprise)", top_n, t_inicio)
 
     return {"recomendaciones": top_n, "modelo": "SVD (Surprise)"}
 
@@ -566,6 +614,7 @@ def enriquecer_recomendaciones(recomendaciones):
 @app.get("/recomendar/knn/{user_id}", response_model=RecommendationResponse)
 def recomendar_knn(user_id: int, n: int = 10):
     """Endpoint de recomendaciones usando KNN + Cosine Similarity (Modelo 2)."""
+    t_inicio = time.perf_counter()
     print(f"DEBUG: Petición KNN para User {user_id}")
     if app.state.modelo_knn is None:
         causa = "app.state.modelo_knn es None"
@@ -611,7 +660,7 @@ def recomendar_knn(user_id: int, n: int = 10):
     enriquecer_recomendaciones(top_n)
 
     # Telemetría: Registra un evento en disco de la recomendación servida
-    telemetria.log_recommendations(str(user_id), "KNN+Cosine", top_n)
+    _log_recomendacion_con_tiempo(user_id, "KNN+Cosine", top_n, t_inicio)
 
     return {"recomendaciones": top_n, "modelo": "KNN+Cosine"}
 
@@ -624,6 +673,7 @@ def recomendar_knn(user_id: int, n: int = 10):
 @app.get("/recomendar/wnd/{user_id}", response_model=RecommendationResponse)
 def recomendar_wnd_endpoint(user_id: int, n: int = 10):
     """Endpoint de recomendaciones usando Wide & Deep Neural Network (ONNX Native)."""
+    t_inicio = time.perf_counter()
     print(f"DEBUG: Petición Wide&Deep para User {user_id}")
     if app.state.modelo_wnd is None or app.state.wnd_mappings is None:
         causa = "app.state.modelo_wnd o mappings es None"
@@ -703,7 +753,7 @@ def recomendar_wnd_endpoint(user_id: int, n: int = 10):
     enriquecer_recomendaciones(top_n)
 
     # Telemetría: Registra un evento en disco de la recomendación servida
-    telemetria.log_recommendations(str(user_id), "Wide&Deep (ONNX)", top_n)
+    _log_recomendacion_con_tiempo(user_id, "Wide&Deep (ONNX)", top_n, t_inicio)
 
     return {"recomendaciones": top_n, "modelo": "Wide&Deep (ONNX)"}
 
@@ -716,6 +766,7 @@ def recomendar_wnd_endpoint(user_id: int, n: int = 10):
 @app.get("/recomendar/content/{user_id}", response_model=RecommendationResponse)
 def recomendar_content_endpoint(user_id: int, n: int = 10):
     """Endpoint de recomendaciones por contenido (Modelo 4)."""
+    t_inicio = time.perf_counter()
     print(f"DEBUG: Petición Content-Based para User {user_id}")
     if app.state.modelo_tfidf_mat is None or app.state.modelo_tfidf_idx is None:
         causa = "app.state.modelo_tfidf_mat o idx es None"
@@ -780,7 +831,7 @@ def recomendar_content_endpoint(user_id: int, n: int = 10):
         enriquecer_recomendaciones(recomendaciones)
 
         # Telemetría: Registra evento
-        telemetria.log_recommendations(str(user_id), nomb_modelo, recomendaciones)
+        _log_recomendacion_con_tiempo(user_id, nomb_modelo, recomendaciones, t_inicio)
 
         return {
             "recomendaciones": recomendaciones,
@@ -826,7 +877,7 @@ def recomendar_content_endpoint(user_id: int, n: int = 10):
     enriquecer_recomendaciones(predicciones)
 
     # Telemetría: Registra evento
-    telemetria.log_recommendations(str(user_id), "Content-Based", predicciones)
+    _log_recomendacion_con_tiempo(user_id, "Content-Based", predicciones, t_inicio)
 
     return {"recomendaciones": predicciones, "modelo": "Content-Based"}
 
@@ -839,6 +890,7 @@ def recomendar_content_endpoint(user_id: int, n: int = 10):
 @app.get("/recomendar/implicit/{user_id}", response_model=RecommendationResponse)
 def recomendar_implicit_endpoint(user_id: int, n: int = 10):
     """Endpoint de recomendaciones usando filtrado colaborativo BPR de la librería implicit."""
+    t_inicio = time.perf_counter()
     print(f"DEBUG: Petición Implicit BPR para User {user_id}")
     if app.state.modelo_imp is None or app.state.modelo_imp_dat is None:
         causa = f"app.state.modelo_imp es {app.state.modelo_imp is None} | app.state.modelo_imp_dat es {app.state.modelo_imp_dat is None}"
@@ -899,7 +951,7 @@ def recomendar_implicit_endpoint(user_id: int, n: int = 10):
     enriquecer_recomendaciones(predicciones)
 
     # Telemetría: Registra evento
-    telemetria.log_recommendations(str(user_id), "Implicit BPR", predicciones)
+    _log_recomendacion_con_tiempo(user_id, "Implicit BPR", predicciones, t_inicio)
 
     return {"recomendaciones": predicciones, "modelo": "Implicit BPR"}
 
@@ -916,6 +968,7 @@ def recomendar_ncf_endpoint(user_id: int, n: int = 10):
     El modelo produce logits de relevancia para cada item; se seleccionan los Top-N
     excluyendo items ya vistos por el usuario.
     """
+    t_inicio = time.perf_counter()
     logger.info(f"Petición NCF para User {user_id}")
 
     if app.state.modelo_ncf is None:
@@ -991,7 +1044,7 @@ def recomendar_ncf_endpoint(user_id: int, n: int = 10):
         enriquecer_recomendaciones(predicciones)
 
         # Telemetría: Registra evento
-        telemetria.log_recommendations(str(user_id), "NCF-Lite", predicciones)
+        _log_recomendacion_con_tiempo(user_id, "NCF-Lite", predicciones, t_inicio)
 
         return {"recomendaciones": predicciones, "modelo": "NCF-Lite"}
 
@@ -1008,6 +1061,7 @@ def recomendar_ncf_endpoint(user_id: int, n: int = 10):
 @app.get("/recomendar/twotowers/{user_id}", response_model=RecommendationResponse)
 def recomendar_tt_endpoint(user_id: int, n: int = 10):
     """Endpoint de recomendaciones usando Two Towers Neural Network (ONNX)."""
+    t_inicio = time.perf_counter()
     logger.info(f"Petición TwoTowers para User {user_id}")
 
     if app.state.modelo_tt is None or app.state.tt_mappings is None:
@@ -1073,7 +1127,7 @@ def recomendar_tt_endpoint(user_id: int, n: int = 10):
     enriquecer_recomendaciones(predicciones)
 
     # Telemetría: Registra evento
-    telemetria.log_recommendations(str(user_id), "Two-Towers", predicciones)
+    _log_recomendacion_con_tiempo(user_id, "Two-Towers", predicciones, t_inicio)
 
     return {"recomendaciones": predicciones, "modelo": "Two-Towers"}
 

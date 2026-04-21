@@ -305,7 +305,7 @@ def predecir_implicit(modelo, datos, user_id, candidatas):
 
 
 # ======================================================================================
-# Predicción para el modelo TX — SVD+KNN+Rerank con géneros
+# Predicción para el modelo TX — SVD latente sobre todo el catálogo (sin kNN ni recortes)
 # ======================================================================================
 
 # Variable global para reutilizar el recommender de tx/ sin reconstruirlo por cada usuario
@@ -314,7 +314,7 @@ _tx_recommender_cache = None
 
 def _obtener_tx_recommender():
     """
-    Construye (o devuelve del caché) el recommender de tx/.
+    Construye (o devuelve del caché) el recommender de tx/ (SVD latente, catálogo completo).
     Se construye una sola vez y se reutiliza para todos los usuarios evaluados.
     """
     global _tx_recommender_cache
@@ -322,8 +322,8 @@ def _obtener_tx_recommender():
         return _tx_recommender_cache
 
     try:
-        from src.models.tx.model_SVD_KNN_RERANK_con_generos import build_recommender
-        print("  Construyendo recommender tx/SVD+KNN+Rerank (con géneros)...")
+        from src.models.tx.model_SVD_latente_catalogo_completo import build_recommender
+        print("  Construyendo recommender tx/SVD latente (catálogo completo, sin kNN)...")
         _tx_recommender_cache = build_recommender(
             force_reprocess=False,
             force_svd_train=False,
@@ -340,33 +340,26 @@ def _obtener_tx_recommender():
         return None
 
 
-def predecir_tx_rerank(id_usuario, candidatas):
+def predecir_tx_rerank(id_usuario, candidatas, historial_visible_ids=None):
     """
-    Genera predicciones Top-K usando el modelo tx/SVD+KNN+Rerank con géneros.
-    A diferencia de los modelos de jj/ (que predicen peli a peli), el de tx/
-    genera un ranking completo internamente, así que solo filtramos por candidatas.
+    Genera predicciones Top-K con SVD latente sobre todos los ítems del encoder tx/,
+    sin kNN, sin n_candidates y sin filtrar por el conjunto candidatas del benchmark
+    (solo excluye vistas visibles vía seen_tmdb_ids_override en el recommender).
     """
+    del candidatas  # API común con otros predictores; no se usa para filtrar.
     recommender = _obtener_tx_recommender()
     if recommender is None:
         return []
 
     try:
-        # El recommender devuelve [{"tmdb_id": ..., "titulo": ..., "score": ...}]
         recomendaciones = recommender.recommend(
             raw_user_id=id_usuario,
             top_n=K,
-            n_neighbors=50,
-            n_candidates=500,
-            rerank_alpha=0.7,
-            genre_weight=0.7,
+            seen_tmdb_ids_override=(
+                set(historial_visible_ids) if historial_visible_ids is not None else None
+            ),
         )
-        # Filtramos para quedarnos solo con las que están en las candidatas
-        ids_candidatas = set(candidatas)
-        resultados_filtrados = [
-            int(r["tmdb_id"]) for r in recomendaciones
-            if int(r["tmdb_id"]) in ids_candidatas
-        ]
-        return resultados_filtrados[:K]
+        return [int(r["tmdb_id"]) for r in recomendaciones[:K]]
     except Exception:
         return []
 
@@ -448,8 +441,17 @@ def evaluar():
     )
 
     # Empezamos el bucle, usuario a usuario
-    for id_usuario in usuarios_test:
+    usuarios_procesados = 0
+    usuarios_con_examen = 0
+    total_usuarios_test = len(usuarios_test)
+    for indice_usuario, id_usuario in enumerate(usuarios_test, start=1):
         try:
+            usuarios_procesados += 1
+            if indice_usuario == 1 or indice_usuario % 10 == 0:
+                print(
+                    f"  [Progreso] Procesando usuario {indice_usuario}/{total_usuarios_test}...",
+                    flush=True,
+                )
             # A) Buscamos su libreta de películas vistas
             historial = df_busqueda_rapida.loc[[id_usuario]].reset_index()
 
@@ -461,6 +463,7 @@ def evaluar():
             # B) Cogemos el 20% al azar y las "tapamos"
             pelis_escondidas = pelis_que_le_fascinan.sample(frac=0.2, random_state=42)
             lista_respuestas_examen.append(pelis_escondidas)
+            usuarios_con_examen += 1
 
             # Lo que le damos al modelo son las que "No hemos escondido"
             historial_visible = historial.drop(pelis_escondidas.index)
@@ -543,14 +546,23 @@ def evaluar():
                     peliculas_candidatas_para_recomendar,
                 )
 
-            # D) Modelo TX: SVD+KNN+Rerank con géneros (siempre disponible, no depende de .pkl)
-            recomendaciones_tx = predecir_tx_rerank(id_usuario, peliculas_candidatas_para_recomendar)
+            # D) Modelo TX: SVD latente en catálogo completo (sin kNN / recortes de candidatos)
+            recomendaciones_tx = predecir_tx_rerank(
+                id_usuario,
+                peliculas_candidatas_para_recomendar,
+                historial_visible["tmdb_id"].unique(),
+            )
             if recomendaciones_tx:
                 respuestas_de_la_ia["TX_RERANK"][id_usuario] = recomendaciones_tx
 
         except Exception as error_escondido:
             # Si falla un usuario, pasamos silenciosamente al siguiente
             continue
+
+    print(
+        f"  [Progreso] Bucle terminado: procesados={usuarios_procesados}, con_examen={usuarios_con_examen}",
+        flush=True,
+    )
 
     # ======================================================================================
     # Computación de Métricas en Batch con el Pipeline
@@ -569,7 +581,7 @@ def evaluar():
         "IMP": "Filtrado Implícito (BPR)",
         "NCF_ONNX": "Red Neuronal NCF-Lite",
         "TT_ONNX": "Two-Towers Bi-Encoder",
-        "TX_RERANK": "SVD+KNN Híbrido con Géneros (TX)",
+        "TX_RERANK": "SVD latente catálogo completo (TX)",
     }
 
     # Le damos a revisar al Tribunal modelo por modelo

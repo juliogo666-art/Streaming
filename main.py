@@ -124,9 +124,24 @@ def main():
     )
 
     try:
-        backend.wait()
-        frontend.wait()
+        import requests
+        while True:
+            if backend.poll() is not None or frontend.poll() is not None:
+                break
+            
+            try:
+                r = requests.get("http://127.0.0.1:8000/api/heartbeat_status", timeout=2)
+                if r.status_code == 200 and r.json().get("seconds_since_last", 0) > 15:
+                    print("\n[Watchdog] El navegador se ha cerrado (Timeout). Terminando procesos...")
+                    break
+            except Exception:
+                pass
+            
+            time.sleep(3)
     except KeyboardInterrupt:
+        pass
+    finally:
+        print("Cerrando procesos...")
         backend.terminate()
         frontend.terminate()
 
@@ -169,9 +184,24 @@ def main_debug():
     )
 
     try:
-        backend.wait()
-        frontend.wait()
+        import requests
+        while True:
+            if backend.poll() is not None or frontend.poll() is not None:
+                break
+            
+            try:
+                r = requests.get("http://127.0.0.1:8000/api/heartbeat_status", timeout=2)
+                if r.status_code == 200 and r.json().get("seconds_since_last", 0) > 15:
+                    print("\n[Watchdog] El navegador se ha cerrado (Timeout). Terminando procesos...")
+                    break
+            except Exception:
+                pass
+            
+            time.sleep(3)
     except KeyboardInterrupt:
+        pass
+    finally:
+        print("Cerrando procesos...")
         backend.terminate()
         frontend.terminate()
 

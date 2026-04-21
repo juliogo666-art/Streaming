@@ -3,6 +3,7 @@ import logging
 import time
 
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from .database import get_db_connection
 from .etl import ejecutar_importacion, limpiar_tablas_contenido
 from ..schemas.schemas import LoginRequest, RegisterRequest, RatingRequest
@@ -240,6 +241,13 @@ async def lifespan(the_app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 # Instanciamos el logger de telemetría (se guardará en logs/recommendations.jsonl)
 # Esto nos servirá para analizar a posteriori qué se ha estado recomendando y a quién.
 telemetria = RecommendationLogger()
@@ -261,6 +269,24 @@ def _log_recomendacion_con_tiempo(
 @app.get("/status")
 def check_status():
     return {"status": "Backend funcionando correctamente"}
+
+# --- Heartbeat Watchdog ---
+heartbeat_iniciado = False
+tiempo_ultimo_heartbeat = time.time()
+
+@app.post("/api/heartbeat")
+def heartbeat():
+    global heartbeat_iniciado, tiempo_ultimo_heartbeat
+    heartbeat_iniciado = True
+    tiempo_ultimo_heartbeat = time.time()
+    return {"status": "ok"}
+
+@app.get("/api/heartbeat_status")
+def heartbeat_status():
+    global heartbeat_iniciado, tiempo_ultimo_heartbeat
+    if not heartbeat_iniciado:
+        return {"seconds_since_last": 0}
+    return {"seconds_since_last": time.time() - tiempo_ultimo_heartbeat}
 
 
 @app.get("/usuarios")

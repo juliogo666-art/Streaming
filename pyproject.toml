@@ -28,6 +28,7 @@ dependencies = [
     "streamlit>=1.55.0",
     "streamlit-lottie>=0.0.5",
     "surprise>=0.1",
+    "tabulate>=0.10.0",
     "torch>=2.11.0",
     "uvicorn>=0.41.0",
 ]

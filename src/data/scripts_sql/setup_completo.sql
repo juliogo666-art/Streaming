@@ -100,6 +100,7 @@ ALTER TABLE users
 CREATE TABLE IF NOT EXISTS user_interests (
     id_usuario INT,
     genre_id INT,
+    source VARCHAR(20) NOT NULL DEFAULT 'user_selected', -- user_selected | ml_inferred
     PRIMARY KEY (id_usuario, genre_id),
     FOREIGN KEY (id_usuario) REFERENCES users(id_usuario) ON DELETE CASCADE,
     FOREIGN KEY (genre_id) REFERENCES genres(id) ON DELETE CASCADE

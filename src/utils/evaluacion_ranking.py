@@ -305,68 +305,74 @@ def predecir_implicit(modelo, datos, user_id, candidatas):
 
 
 # ======================================================================================
-# Predicción para el modelo TX — SVD+KNN+Rerank con géneros
+# Predicción para el modelo TX — SVD + Cosine Similarity
 # ======================================================================================
 
-# Variable global para reutilizar el recommender de tx/ sin reconstruirlo por cada usuario
-_tx_recommender_cache = None
+# Variables globales para reutilizar el modelo tx/ sin recargarlo por cada usuario
+_tx_svd_cs_payload_cache = None
 
 
-def _obtener_tx_recommender():
+def _obtener_tx_svd_cs_payload():
     """
-    Construye (o devuelve del caché) el recommender de tx/.
-    Se construye una sola vez y se reutiliza para todos los usuarios evaluados.
+    Carga (o devuelve del caché) el payload del modelo tx/SVD_CS.
+    El payload incluye:
+      - modelo (Surprise SVD)
+      - trainset (mapeos raw_id <-> inner_id)
     """
-    global _tx_recommender_cache
-    if _tx_recommender_cache is not None:
-        return _tx_recommender_cache
+    global _tx_svd_cs_payload_cache
+    if _tx_svd_cs_payload_cache is not None:
+        return _tx_svd_cs_payload_cache
 
     try:
-        from src.models.tx.model_SVD_KNN_RERANK_con_generos import build_recommender
-        print("  Construyendo recommender tx/SVD+KNN+Rerank (con géneros)...")
-        _tx_recommender_cache = build_recommender(
-            force_reprocess=False,
-            force_svd_train=False,
-            force_knn_train=False,
-            force_catalog_features_rebuild=False,
-            min_ratings=30,
-            latent_dim=50,
-            knn_neighbors_fit=80,
-        )
-        print("  Recommender tx/ construido correctamente.")
-        return _tx_recommender_cache
+        from src.models.tx.model_SVD_CS import cargar_modelo_guardado
+        print("  Cargando modelo tx/SVD+CS...")
+        payload = cargar_modelo_guardado()
+        if payload is None:
+            return None
+        _tx_svd_cs_payload_cache = payload
+        print("  Modelo tx/SVD+CS cargado correctamente.")
+        return _tx_svd_cs_payload_cache
     except Exception as e:
-        print(f"  [ERROR] No se pudo construir el recommender tx/: {e}")
+        print(f"  [ERROR] No se pudo cargar el modelo tx/SVD+CS: {e}")
         return None
 
 
-def predecir_tx_rerank(id_usuario, candidatas):
+def predecir_tx_svd_cs(id_usuario, candidatas):
     """
-    Genera predicciones Top-K usando el modelo tx/SVD+KNN+Rerank con géneros.
-    A diferencia de los modelos de jj/ (que predicen peli a peli), el de tx/
-    genera un ranking completo internamente, así que solo filtramos por candidatas.
+    Genera predicciones Top-K usando el modelo tx/SVD+CS puntuando
+    DIRECTAMENTE las candidatas del benchmark.
+    Esto evita desalineaciones entre "no vistas" internas del modelo y
+    el protocolo holdout de evaluación.
     """
-    recommender = _obtener_tx_recommender()
-    if recommender is None:
+    payload = _obtener_tx_svd_cs_payload()
+    if payload is None:
         return []
 
     try:
-        # El recommender devuelve [{"tmdb_id": ..., "titulo": ..., "score": ...}]
-        recomendaciones = recommender.recommend(
-            raw_user_id=id_usuario,
-            top_n=K,
-            n_neighbors=50,
-            n_candidates=500,
-            rerank_alpha=0.7,
-            genre_weight=0.7,
-        )
-        # Filtramos para quedarnos solo con las que están en las candidatas
-        ids_candidatas = set(candidatas)
-        resultados_filtrados = [
-            int(r["tmdb_id"]) for r in recomendaciones
-            if int(r["tmdb_id"]) in ids_candidatas
-        ]
-        return resultados_filtrados[:K]
+        modelo = payload["modelo"]
+        trainset = payload["trainset"]
+        from src.models.tx.model_SVD_CS import _cosine_similarity
+
+        # Usuario debe existir en trainset para tener embedding
+        try:
+            u_inner = trainset.to_inner_uid(id_usuario)
+        except ValueError:
+            return []
+
+        user_vec = modelo.pu[u_inner]
+        predicciones = []
+        for id_peli in candidatas:
+            try:
+                i_inner = trainset.to_inner_iid(int(id_peli))
+            except ValueError:
+                # Ítem no conocido por el trainset del modelo
+                continue
+            item_vec = modelo.qi[i_inner]
+            score = _cosine_similarity(user_vec, item_vec)
+            predicciones.append((int(id_peli), float(score)))
+
+        predicciones.sort(key=lambda x: x[1], reverse=True)
+        return [p[0] for p in predicciones[:K]]
     except Exception:
         return []
 
@@ -437,10 +443,10 @@ def evaluar():
     lista_respuestas_examen = []
 
     # Aquí guardaremos lo que responde la IA en el examen. Un diccionario por cada inteligencia.
-    # Incluimos TX_RERANK para evaluar el modelo híbrido de tx/ junto a los demás
+    # Incluimos TX_SVD_CS para evaluar el modelo de tx/ junto a los demás
     respuestas_de_la_ia = {
         m: {}
-        for m in ["SVD", "KNN", "WND_ONNX", "TFIDF_MAT", "IMP", "NCF_ONNX", "TT_ONNX", "TX_RERANK"]
+        for m in ["SVD", "KNN", "WND_ONNX", "TFIDF_MAT", "IMP", "NCF_ONNX", "TT_ONNX", "TX_SVD_CS"]
     }
 
     print(
@@ -543,10 +549,13 @@ def evaluar():
                     peliculas_candidatas_para_recomendar,
                 )
 
-            # D) Modelo TX: SVD+KNN+Rerank con géneros (siempre disponible, no depende de .pkl)
-            recomendaciones_tx = predecir_tx_rerank(id_usuario, peliculas_candidatas_para_recomendar)
+            # D) Modelo TX: SVD+Cosine Similarity
+            recomendaciones_tx = predecir_tx_svd_cs(
+                id_usuario,
+                peliculas_candidatas_para_recomendar,
+            )
             if recomendaciones_tx:
-                respuestas_de_la_ia["TX_RERANK"][id_usuario] = recomendaciones_tx
+                respuestas_de_la_ia["TX_SVD_CS"][id_usuario] = recomendaciones_tx
 
         except Exception as error_escondido:
             # Si falla un usuario, pasamos silenciosamente al siguiente
@@ -569,7 +578,7 @@ def evaluar():
         "IMP": "Filtrado Implícito (BPR)",
         "NCF_ONNX": "Red Neuronal NCF-Lite",
         "TT_ONNX": "Two-Towers Bi-Encoder",
-        "TX_RERANK": "SVD+KNN Híbrido con Géneros (TX)",
+        "TX_SVD_CS": "SVD + Cosine Similarity (TX)",
     }
 
     # Le damos a revisar al Tribunal modelo por modelo

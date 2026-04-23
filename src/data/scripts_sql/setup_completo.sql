@@ -7,6 +7,7 @@
 --   3. migration_user_v2.sql
 --   4. migration_user_v3.sql
 --   5. create_serendipity_cache.sql
+--   6. create_user_ratings.sql
 -- ============================================================
 
 CREATE DATABASE IF NOT EXISTS streaming_db
@@ -85,8 +86,23 @@ ALTER TABLE contents MODIFY COLUMN vote_average DECIMAL(4,2);
 -- Subir el tamaño máximo de paquete para descripciones largas / imágenes base64
 SET GLOBAL max_allowed_packet=67108864; -- 64MB
 
+-- Añadir columna video si no existe (añadida posteriormente al DDL original)
+ALTER TABLE contents ADD COLUMN IF NOT EXISTS video BOOLEAN DEFAULT FALSE AFTER title;
+
 -- Hacer que id_usuario comience en 500000 (margen para el dataset de ratings)
+-- Se revisó el dataset de ratings: max id_usuario deja margen para +150000 ids
 ALTER TABLE users AUTO_INCREMENT = 500000;
+
+-- Si ya existen usuarios, reasignar id_usuario para que empiecen en 500000
+SET @nuevo_id := 499999;
+UPDATE users u
+JOIN (
+    SELECT id_usuario, (@nuevo_id := @nuevo_id + 1) AS id_reasignado
+    FROM users
+    ORDER BY id_usuario
+) r ON u.id_usuario = r.id_usuario
+SET u.id_usuario = r.id_reasignado
+WHERE u.id_usuario > 0;
 
 -- ============================================================
 -- BLOQUE 3: migration_user_v2.sql — Sexo e Intereses de Usuario
@@ -115,6 +131,7 @@ ALTER TABLE users
     ADD COLUMN IF NOT EXISTS sexo ENUM('Hombre', 'Mujer', 'Otro') AFTER fecha_nacimiento;
 
 -- Añadir columna role si no existe
+-- Valores posibles: 'admin' para administradores, 'user' para usuarios estándar
 ALTER TABLE users
     ADD COLUMN IF NOT EXISTS role ENUM('admin', 'user') NOT NULL DEFAULT 'user' AFTER sexo;
 
@@ -122,7 +139,25 @@ ALTER TABLE users
 UPDATE users SET role = 'admin' WHERE username = 'root';
 
 -- ============================================================
--- BLOQUE 5: create_serendipity_cache.sql — Tragaperras de Serendipia
+-- BLOQUE 5: modificaciones.sql (cont.) — Origen de intereses
+-- ============================================================
+
+-- Añadir columna source para distinguir selección manual vs inferencia ML
+ALTER TABLE user_interests
+    ADD COLUMN IF NOT EXISTS source VARCHAR(20) NOT NULL DEFAULT 'user_selected' AFTER genre_id;
+
+-- Backfill del origen de intereses:
+--   · usuarios importados desde MovieLens (id < 500000) => ml_inferred
+--   · usuarios de registro propio (id >= 500000)        => user_selected
+UPDATE user_interests ui
+JOIN users u ON u.id_usuario = ui.id_usuario
+SET ui.source = CASE
+    WHEN u.id_usuario < 500000 THEN 'ml_inferred'
+    ELSE 'user_selected'
+END;
+
+-- ============================================================
+-- BLOQUE 6: create_serendipity_cache.sql — Tragaperras de Serendipia
 -- ============================================================
 
 -- Tabla de Caché de Serendipia (Tragaperras)
@@ -142,7 +177,7 @@ CREATE TABLE IF NOT EXISTS serendipity_cache (
 );
 
 -- ============================================================
--- BLOQUE 6: create_user_ratings.sql — Valoraciones de usuarios
+-- BLOQUE 7: create_user_ratings.sql — Valoraciones de usuarios
 -- ============================================================
 
 -- Tabla para almacenar las valoraciones que los usuarios

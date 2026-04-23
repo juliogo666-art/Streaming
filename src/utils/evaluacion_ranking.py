@@ -454,8 +454,17 @@ def evaluar():
     )
 
     # Empezamos el bucle, usuario a usuario
-    for id_usuario in usuarios_test:
+    usuarios_procesados = 0
+    usuarios_con_examen = 0
+    total_usuarios_test = len(usuarios_test)
+    for indice_usuario, id_usuario in enumerate(usuarios_test, start=1):
         try:
+            usuarios_procesados += 1
+            if indice_usuario == 1 or indice_usuario % 10 == 0:
+                print(
+                    f"  [Progreso] Procesando usuario {indice_usuario}/{total_usuarios_test}...",
+                    flush=True,
+                )
             # A) Buscamos su libreta de películas vistas
             historial = df_busqueda_rapida.loc[[id_usuario]].reset_index()
 
@@ -467,6 +476,7 @@ def evaluar():
             # B) Cogemos el 20% al azar y las "tapamos"
             pelis_escondidas = pelis_que_le_fascinan.sample(frac=0.2, random_state=42)
             lista_respuestas_examen.append(pelis_escondidas)
+            usuarios_con_examen += 1
 
             # Lo que le damos al modelo son las que "No hemos escondido"
             historial_visible = historial.drop(pelis_escondidas.index)
@@ -560,6 +570,11 @@ def evaluar():
         except Exception as error_escondido:
             # Si falla un usuario, pasamos silenciosamente al siguiente
             continue
+
+    print(
+        f"  [Progreso] Bucle terminado: procesados={usuarios_procesados}, con_examen={usuarios_con_examen}",
+        flush=True,
+    )
 
     # ======================================================================================
     # Computación de Métricas en Batch con el Pipeline

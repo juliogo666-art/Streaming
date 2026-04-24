@@ -502,3 +502,24 @@ elif st.session_state["autenticado"]:
         from src.frontend.vista_usuario import render as render_usuario
 
         render_usuario()
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  WATCHDOG HEARTBEAT (Se ejecuta siempre para avisar al backend que estamos vivos)
+# ══════════════════════════════════════════════════════════════════════════════
+import streamlit.components.v1 as components
+components.html(
+    """
+    <script>
+    function sendHeartbeat() {
+        fetch('http://127.0.0.1:8000/api/heartbeat', {method: 'POST'})
+        .catch(e => console.log('Heartbeat fallido', e));
+    }
+    // Enviar el primero inmediatamente
+    sendHeartbeat();
+    // Y luego cada 5 segundos
+    setInterval(sendHeartbeat, 5000);
+    </script>
+    """,
+    height=0,
+    width=0,
+)

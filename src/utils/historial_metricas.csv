@@ -30,3 +30,5 @@ timestamp,modelo,n_factores,n_epocas,learning_rate,regularizacion,embedding_dim,
 2026-04-12 00:24:55,SVD+KNN Híbrido con Géneros (TX),NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,0.0,0.0,0.0,0.0,0.013772,0.0,NA,25769933,"Evaluación ranking K=10, 300 usuarios test"
 2026-04-25 19:06:15,TestCSV,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,0.4,1.0,NA,NA,NA,1.5,100,Test unitario
 2026-04-25 19:06:44,TestCSV,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,0.4,1.0,NA,NA,NA,1.5,100,Test unitario
+2026-04-25 23:16:16,TestCSV,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,0.4,1.0,NA,NA,NA,1.5,100,Test unitario
+2026-04-25 23:17:53,TestCSV,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,0.4,1.0,NA,NA,NA,1.5,100,Test unitario

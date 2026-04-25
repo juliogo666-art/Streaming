@@ -25,12 +25,12 @@ RUTA_IMP = "artifacts/weights/modelo_5_implicit.pkl"
 RUTA_IMP_DAT = "artifacts/weights/modelo_5_implicit_dataset.pkl"
 
 # --- Rutas de Modelos: Exports (ONNX) ---
-RUTA_MODELO_WND = "artifacts/exports/modelo_3_wnd.onnx"
+RUTA_MODELO_WND = "artifacts/exports/modelo_3_wnd_r100.onnx"
 RUTA_MODELO_NCF = "artifacts/exports/modelo_6_ncf.onnx"
 RUTA_MODELO_TT = "artifacts/exports/modelo_7_twotowers.onnx"
 
 # --- Rutas de Modelos: Mapeos ---
-RUTA_WND_MAP = "artifacts/mappings/wnd_mappings.pkl"
+RUTA_WND_MAP = "artifacts/mappings/wnd_mappings_r100.pkl"
 RUTA_NCF_USER2IDX = "artifacts/mappings/ncf_user2idx.json"
 RUTA_NCF_ITEM2IDX = "artifacts/mappings/ncf_item2idx.json"
 RUTA_TT_MAP = "artifacts/mappings/twotowers_mappings.pkl"

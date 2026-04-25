@@ -195,6 +195,10 @@ async def lifespan(the_app: FastAPI):
     logger.info(f"[BENCHMARK]   {'TOTAL ARRANQUE':<42} {t_total:>6.2f}s")
     logger.info(f"[BENCHMARK] {sep}")
 
+    # Registrar tiempo de arranque en el colector de rendimiento
+    from ..tracking.performance import colector as perf_colector
+    perf_colector.tiempo_arranque_s = t_total
+
     logger.info("[STARTUP] Sistema listo para servir peticiones.")
     yield  # La app está corriendo
     logger.info("[SHUTDOWN] Cerrando aplicación...")
@@ -210,6 +214,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Middleware de monitorización de rendimiento
+from ..tracking.performance import PerformanceMiddleware
+app.add_middleware(PerformanceMiddleware)
 
 # Importar y registrar routers
 from .routers.auth import router as auth_router
@@ -250,3 +258,11 @@ def heartbeat_status():
     if not _heartbeat_iniciado:
         return {"seconds_since_last": 0}
     return {"seconds_since_last": time.time() - _tiempo_ultimo_heartbeat}
+
+
+# --- Endpoint de Rendimiento ---
+@app.get("/api/performance")
+def get_performance():
+    """Devuelve métricas de rendimiento en vivo (latencia, RAM, CPU, arranque)."""
+    from ..tracking.performance import colector as perf_colector
+    return perf_colector.exportar_todo()

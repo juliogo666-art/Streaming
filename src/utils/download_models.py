@@ -30,27 +30,44 @@ ARTIFACTS_DIR = os.path.join(PROYECTO_RAIZ, "artifacts")
 ARCHIVOS_REQUERIDOS = {
     # --- Weights (modelos clásicos) ---
     "weights/modelo_1_SVD.joblib": "weights/modelo_1_SVD.joblib",
+    "weights/modelo_1_SVD.pkl": "weights/modelo_1_SVD.pkl",
+    "weights/modelo_2_knn_cs.joblib": "weights/modelo_2_knn_cs.joblib",
+    "weights/modelo_2_knn_cs.pkl": "weights/modelo_2_knn_cs.pkl",
     "weights/modelo_2.5_knn_msd.joblib": "weights/modelo_2.5_knn_msd.joblib",
+    "weights/modelo_2.5_knn_msd.pkl": "weights/modelo_2.5_knn_msd.pkl",
     "weights/modelo_4_indices.joblib": "weights/modelo_4_indices.joblib",
+    "weights/modelo_4_indices.pkl": "weights/modelo_4_indices.pkl",
     "weights/modelo_4_matriz.joblib": "weights/modelo_4_matriz.joblib",
+    "weights/modelo_4_matriz.pkl": "weights/modelo_4_matriz.pkl",
     "weights/modelo_4_tfidf.joblib": "weights/modelo_4_tfidf.joblib",
+    "weights/modelo_4_tfidf.pkl": "weights/modelo_4_tfidf.pkl",
     "weights/modelo_5_implicit.pkl": "weights/modelo_5_implicit.pkl",
     "weights/modelo_5_implicit_dataset.pkl": "weights/modelo_5_implicit_dataset.pkl",
+    "weights/modelo_5_metricas.json": "weights/modelo_5_metricas.json",
     # --- Exports (ONNX) ---
     "exports/modelo_3_wnd.onnx": "exports/modelo_3_wnd.onnx",
     "exports/modelo_3_wnd.onnx.data": "exports/modelo_3_wnd.onnx.data",
+    "exports/modelo_3_wnd_r100.onnx": "exports/modelo_3_wnd_r100.onnx",
+    "exports/modelo_3_wnd_r100.onnx.data": "exports/modelo_3_wnd_r100.onnx.data",
     "exports/modelo_6_ncf.onnx": "exports/modelo_6_ncf.onnx",
     "exports/modelo_6_ncf.onnx.data": "exports/modelo_6_ncf.onnx.data",
     "exports/modelo_7_twotowers.onnx": "exports/modelo_7_twotowers.onnx",
     "exports/modelo_7_twotowers.onnx.data": "exports/modelo_7_twotowers.onnx.data",
+    "exports/modelo_7_twotowers_r100.onnx": "exports/modelo_7_twotowers_r100.onnx",
+    "exports/modelo_7_twotowers_r100.onnx.data": "exports/modelo_7_twotowers_r100.onnx.data",
+    "exports/nil_ncf_model.onnx": "exports/nil_ncf_model.onnx",
     # --- Mappings ---
     "mappings/wnd_mappings.pkl": "mappings/wnd_mappings.pkl",
+    "mappings/wnd_mappings_r100.pkl": "mappings/wnd_mappings_r100.pkl",
     "mappings/ncf_user2idx.json": "mappings/ncf_user2idx.json",
     "mappings/ncf_item2idx.json": "mappings/ncf_item2idx.json",
     "mappings/twotowers_mappings.pkl": "mappings/twotowers_mappings.pkl",
+    "mappings/twotowers_mappings_r100.pkl": "mappings/twotowers_mappings_r100.pkl",
     # --- Checkpoints (PyTorch) ---
     "checkpoints/modelo_3_wnd.pth": "checkpoints/modelo_3_wnd.pth",
+    "checkpoints/modelo_3_wnd_r100.pth": "checkpoints/modelo_3_wnd_r100.pth",
     "checkpoints/modelo_7_twotowers.pth": "checkpoints/modelo_7_twotowers.pth",
+    "checkpoints/modelo_7_twotowers_r100.pth": "checkpoints/modelo_7_twotowers_r100.pth",
 }
 
 
@@ -94,7 +111,9 @@ def verificar_y_descargar(
         logger.info("[MODELS] Todos los modelos están presentes localmente. ✓")
         return resultado
 
-    logger.info(f"[MODELS] Faltan {len(faltantes)} archivos. Iniciando descarga desde HuggingFace...")
+    logger.info(
+        f"[MODELS] Faltan {len(faltantes)} archivos. Iniciando descarga desde HuggingFace..."
+    )
 
     # Importamos aquí para no forzar la dependencia si los modelos ya existen
     try:
@@ -124,8 +143,8 @@ def verificar_y_descargar(
                 repo_id=HF_REPO,
                 filename=ruta_repo,
                 repo_type="model",
-                local_dir=ARTIFACTS_DIR,        # Descarga directamente a artifacts/
-                local_dir_use_symlinks=False,    # Copia real, no symlinks (Windows)
+                local_dir=ARTIFACTS_DIR,  # Descarga directamente a artifacts/
+                local_dir_use_symlinks=False,  # Copia real, no symlinks (Windows)
             )
             resultado["descargados"] += 1
             logger.info(f"[MODELS]           ✓ {nombre_corto} descargado.")
@@ -145,7 +164,9 @@ def verificar_y_descargar(
 
 # --- Ejecución directa como script ---
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s"
+    )
 
     print("=" * 60)
     print("  Verificador y Descargador de Modelos")

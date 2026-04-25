@@ -171,7 +171,55 @@ def recomendar_wnd_endpoint(user_id: int, n: int = 10):
     pelis_vistas = set(
         state.df_ratings_ia[state.df_ratings_ia["userId"] == user_id]["tmdb_id"].tolist()
     )
-    candidatas = [(tid, midx) for tid, midx in movie2idx.items() if tid not in pelis_vistas]
+
+    # BUG-FIX: El modelo ONNX fue exportado con N items en el embedding,
+    # pero el mapping actual puede tener más (desincronización ONNX/mapping).
+    # Detectamos el límite real del embedding con una búsqueda binaria (1 sola vez).
+    if not hasattr(state, "_wnd_item_limit"):
+        lo, hi = 0, max(movie2idx.values()) + 1
+        safe_user = np.array([min(user2idx.values())], dtype=np.int64)
+        while lo < hi:
+            mid = (lo + hi) // 2
+            try:
+                state.modelo_wnd.run(None, {
+                    "user_ids": safe_user,
+                    "item_ids": np.array([mid], dtype=np.int64),
+                })
+                lo = mid + 1
+            except Exception:
+                hi = mid
+        state._wnd_item_limit = lo  # Primer índice inválido
+        state._wnd_user_limit = None
+        # Detectar también el límite de usuarios
+        lo2, hi2 = 0, max(user2idx.values()) + 1
+        safe_item = np.array([0], dtype=np.int64)
+        while lo2 < hi2:
+            mid2 = (lo2 + hi2) // 2
+            try:
+                state.modelo_wnd.run(None, {
+                    "user_ids": np.array([mid2], dtype=np.int64),
+                    "item_ids": safe_item,
+                })
+                lo2 = mid2 + 1
+            except Exception:
+                hi2 = mid2
+        state._wnd_user_limit = lo2
+
+    # Validar que el usuario está dentro del rango del embedding
+    if u_idx >= state._wnd_user_limit:
+        count = state.user_counts.get(user_id, 0)
+        return {
+            "recomendaciones": [],
+            "modelo": "Wide&Deep (ONNX)",
+            "mensaje": f"Usuario fuera del rango del modelo entrenado ({count} valoraciones).",
+            "insufficient_data": True,
+        }
+
+    candidatas = [
+        (tid, midx) for tid, midx in movie2idx.items()
+        if tid not in pelis_vistas and midx < state._wnd_item_limit
+    ]
+
     if not candidatas:
         return {
             "recomendaciones": [],

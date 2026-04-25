@@ -210,4 +210,33 @@ __marimo__/
 # csv massivos GitHub no tolera
 src/data/raw/movielens/*.csv
 
-src/data/raw/tmdb/series/*.jsonl
+
+src/data/raw/tmdb/series/*
+src/data/raw/tmdb/movies/*
+
+src/data/clean/*.csv
+
+src/data/ready/*.csv
+
+doc/
+
+
+
+# Guardar credenciales de acceso
+.env
+
+# Modelos entrenados (pesan demasiado para GitHub, se descargan de HuggingFace automáticamente)
+*.pkl
+*.pth
+*.joblib
+*.onnx
+*.onnx.data
+
+# Acciones de maquina para verificar
+machine_check/
+
+# Información nuestra
+info/
+
+#evitar subir datos de cache
+src/data/cache/*

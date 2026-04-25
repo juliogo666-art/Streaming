@@ -5,5 +5,36 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "bcrypt>=5.0.0",
+    "dotenv>=0.9.9",
+    "extra-streamlit-components>=0.1.81",
+    "fastapi>=0.135.1",
+    "huggingface-hub>=1.10.2",
+    "implicit>=0.7.2",
+    "jinja2>=3.1.6",
+    "joblib>=1.5.3",
+    "matplotlib>=3.10.8",
+    "mysql-connector-python>=9.6.0",
+    "numpy<2",
+    "onnx>=1.19.0",
+    "onnxruntime>=1.24.4",
+    "onnxscript>=0.5.0",
+    "pipelines>=0.0.1",
+    "pydantic>=2.12.5",
     "requests>=2.32.5",
+    "scikit-learn>=1.8.0",
+    "scikit-surprise>=1.1.4",
+    "seaborn>=0.13.2",
+    "streamlit>=1.55.0",
+    "streamlit-lottie>=0.0.5",
+    "surprise>=0.1",
+    "tabulate>=0.10.0",
+    "torch>=2.11.0",
+    "uvicorn>=0.41.0",
+]
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "pytest>=9.0.3",
 ]

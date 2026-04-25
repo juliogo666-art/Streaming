@@ -11,6 +11,7 @@ Sin sidebar de navegación: toda la lógica de routing es por session_state.
 import streamlit as st
 import requests
 import datetime
+from src.config.settings import API_BASE_URL
 import base64
 import os
 import time
@@ -204,7 +205,7 @@ if "backend_listo" not in st.session_state:
 def _comprobar_backend():
     """Intenta conectar con el backend. Devuelve True si responde."""
     try:
-        r = requests.get("http://127.0.0.1:8000/status", timeout=2)
+        r = requests.get(f"{API_BASE_URL}/status", timeout=2)
         return r.status_code == 200
     except Exception:
         return False
@@ -271,11 +272,14 @@ if not st.session_state["backend_listo"]:
                 unsafe_allow_html=True,
             )
             with st.spinner("Cargando..."):
-                time.sleep(110)
+                # Polling: comprueba cada 5s si el backend ya está listo (max ~150s)
+                for _ in range(30):
+                    time.sleep(5)
+                    if _comprobar_backend():
+                        break
         st.markdown("</div>", unsafe_allow_html=True)
 
-        # Esperar y reintentar automáticamente
-        time.sleep(5)
+        # Reintentar automáticamente
         st.rerun()
 
 

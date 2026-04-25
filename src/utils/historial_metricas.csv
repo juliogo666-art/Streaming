@@ -28,3 +28,5 @@ timestamp,modelo,n_factores,n_epocas,learning_rate,regularizacion,embedding_dim,
 2026-04-12 00:24:54,Red Neuronal NCF-Lite,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,0.778745,0.823746,0.132066,0.996656,0.054762,0.963322,NA,25769933,"Evaluación ranking K=10, 300 usuarios test"
 2026-04-12 00:24:54,Two-Towers Bi-Encoder,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,0.024858,0.028428,0.004082,0.160535,0.011303,0.057611,NA,25769933,"Evaluación ranking K=10, 300 usuarios test"
 2026-04-12 00:24:55,SVD+KNN Híbrido con Géneros (TX),NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,0.0,0.0,0.0,0.0,0.013772,0.0,NA,25769933,"Evaluación ranking K=10, 300 usuarios test"
+2026-04-25 19:06:15,TestCSV,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,0.4,1.0,NA,NA,NA,1.5,100,Test unitario
+2026-04-25 19:06:44,TestCSV,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,0.4,1.0,NA,NA,NA,1.5,100,Test unitario

@@ -1,6 +1,4 @@
 """
-test_serendipia.py
-==================
 Tests de integración para el endpoint GET /api/serendipia/{user_id}.
 
 Flujo de cada test:
@@ -18,7 +16,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from src.api.database import get_db_connection
-from src.api.main_api import app, _GENRE_ES_TO_EN
+from src.api.main_api import app
+from src.api.routers.serendipia import _GENRE_ES_TO_EN
 
 client = TestClient(app)
 
@@ -30,7 +29,7 @@ client = TestClient(app)
 # Los géneros elegidos tienen traducción directa español → inglés confirmada.
 # genre_id=18 → "Drama"      → cache: "Drama"
 # genre_id=10749 → "Romance"  → cache: "Romance"
-TEST_GENRE_IDS = [18, 10749]   # Drama, Romance
+TEST_GENRE_IDS = [18, 10749]  # Drama, Romance
 _TEST_USER_ID: int | None = None  # se rellena en la fixture
 
 
@@ -49,6 +48,7 @@ def _get_first_user_id() -> int:
 # ---------------------------------------------------------------------------
 # Fixture: inserta/elimina user_interests de prueba
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture(scope="module")
 def usuario_con_generos():
@@ -85,8 +85,8 @@ def usuario_con_generos():
 # Tests
 # ---------------------------------------------------------------------------
 
-class TestSerendipiaEndpoint:
 
+class TestSerendipiaEndpoint:
     def test_respuesta_200(self, usuario_con_generos):
         """El endpoint debe devolver HTTP 200."""
         user_id = usuario_con_generos
@@ -142,7 +142,9 @@ class TestSerendipiaEndpoint:
         conn = get_db_connection()
         cur = conn.cursor()
         placeholders = ",".join(["%s"] * len(TEST_GENRE_IDS))
-        cur.execute(f"SELECT name FROM genres WHERE id IN ({placeholders})", TEST_GENRE_IDS)
+        cur.execute(
+            f"SELECT name FROM genres WHERE id IN ({placeholders})", TEST_GENRE_IDS
+        )
         nombres_esperados = {row[0] for row in cur.fetchall()}
         cur.close()
         conn.close()
@@ -167,7 +169,9 @@ class TestSerendipiaEndpoint:
             data = client.get(f"/api/serendipia/{user_id}").json()
             ids = tuple(sorted(r["movie_id"] for r in data["recomendaciones"]))
             resultados.add(ids)
-        assert len(resultados) > 1, "El endpoint devuelve siempre el mismo resultado (no aleatorio)"
+        assert len(resultados) > 1, (
+            "El endpoint devuelve siempre el mismo resultado (no aleatorio)"
+        )
 
     def test_usuario_sin_generos_devuelve_404(self):
         """Un user_id sin intereses registrados debe devolver 404."""
@@ -194,10 +198,12 @@ class TestSerendipiaEndpoint:
         conn.close()
 
         # 3. Inyectar un df_ratings_ia falso que dice que el usuario ya puntuó esas películas
-        df_simulado = pd.DataFrame({
-            "userId": [user_id] * len(todos_ids),
-            "tmdb_id": todos_ids,
-        })
+        df_simulado = pd.DataFrame(
+            {
+                "userId": [user_id] * len(todos_ids),
+                "tmdb_id": todos_ids,
+            }
+        )
         original_ratings = getattr(app.state, "df_ratings_ia", None)
         app.state.df_ratings_ia = df_simulado
 
@@ -228,10 +234,12 @@ class TestSerendipiaEndpoint:
         conn.close()
 
         # Simular que el usuario ya puntuó los top-50 (alta probabilidad de colisión sin el filtro)
-        df_simulado = pd.DataFrame({
-            "userId": [user_id] * len(top_ids),
-            "tmdb_id": top_ids,
-        })
+        df_simulado = pd.DataFrame(
+            {
+                "userId": [user_id] * len(top_ids),
+                "tmdb_id": top_ids,
+            }
+        )
         original_ratings = getattr(app.state, "df_ratings_ia", None)
         app.state.df_ratings_ia = df_simulado
 
@@ -262,13 +270,30 @@ class TestGeneroMapeo:
         # Géneros TV de TMDB (Action & Adventure, Kids, etc.) no están en serendipity_cache
         # y pueden ignorarse en el mapeo; sólo validamos los géneros de película.
         generos_pelicula_es = {
-            "Acción", "Aventura", "Animación", "Comedia", "Crimen", "Documental",
-            "Drama", "Familia", "Fantasía", "Historia", "Terror", "Música",
-            "Misterio", "Romance", "Ciencia ficción", "Película de TV", "Suspense",
-            "Bélica", "Western",
+            "Acción",
+            "Aventura",
+            "Animación",
+            "Comedia",
+            "Crimen",
+            "Documental",
+            "Drama",
+            "Familia",
+            "Fantasía",
+            "Historia",
+            "Terror",
+            "Música",
+            "Misterio",
+            "Romance",
+            "Ciencia ficción",
+            "Película de TV",
+            "Suspense",
+            "Bélica",
+            "Western",
         }
         sin_traduccion = generos_pelicula_es - set(_GENRE_ES_TO_EN.keys())
-        assert not sin_traduccion, f"Géneros sin traducción en _GENRE_ES_TO_EN: {sin_traduccion}"
+        assert not sin_traduccion, (
+            f"Géneros sin traducción en _GENRE_ES_TO_EN: {sin_traduccion}"
+        )
 
     def test_traducciones_apuntan_a_generos_en_cache(self):
         """Los valores del mapeo deben existir como géneros en serendipity_cache."""
@@ -280,7 +305,9 @@ class TestGeneroMapeo:
         conn.close()
 
         sin_cache = set(_GENRE_ES_TO_EN.values()) - generos_cache
-        assert not sin_cache, f"Géneros del mapeo no encontrados en serendipity_cache: {sin_cache}"
+        assert not sin_cache, (
+            f"Géneros del mapeo no encontrados en serendipity_cache: {sin_cache}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -302,9 +329,9 @@ if __name__ == "__main__":
     cur.close()
     conn.close()
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"  DEMO SERENDIPIA — usuario {user_id}")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
     try:
         # Llamar al endpoint 3 veces para mostrar que los resultados varían
@@ -321,9 +348,11 @@ if __name__ == "__main__":
             print(f"\n--- Ronda {ronda} ---")
             print(f"Géneros favoritos : {' | '.join(generos)}")
             print(f"{'movie_id':<12} {'género':<20} {'score':>10}")
-            print(f"{'-'*12} {'-'*20} {'-'*10}")
+            print(f"{'-' * 12} {'-' * 20} {'-' * 10}")
             for r in recs:
-                print(f"{r['movie_id']:<12} {r['genre']:<20} {r['serendipity_score']:>10.6f}")
+                print(
+                    f"{r['movie_id']:<12} {r['genre']:<20} {r['serendipity_score']:>10.6f}"
+                )
 
     finally:
         # Limpiar datos de prueba
@@ -336,5 +365,5 @@ if __name__ == "__main__":
         conn.commit()
         cur.close()
         conn.close()
-        print(f"\n{'='*60}")
+        print(f"\n{'=' * 60}")
         print("  Intereses de prueba eliminados.")

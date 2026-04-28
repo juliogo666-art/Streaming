@@ -1,5 +1,12 @@
 {
   "media_valoraciones_usuario": 78.52,
   "usuarios_menos_20_valoraciones": 145758,
-  "total_usuarios": 328210
+  "total_usuarios": 328210,
+  "smart_cold_start": 85387,
+  "smart_intermedio": 177854,
+  "smart_experto": 64969,
+  "sparsity_pct": 99.86,
+  "total_usuarios_unicos": 328210,
+  "total_peliculas_unicas": 55719,
+  "total_interacciones": 25769933
 }

@@ -1,5 +1,10 @@
+-- ============================================================
+-- create_database.sql
+-- Esquema base consolidado (sin migraciones posteriores)
+-- ============================================================
+
 -- 1. Tabla Maestra de Contenido (Películas y Series)
-CREATE TABLE contents (
+CREATE TABLE IF NOT EXISTS contents (
     tmdb_id INT PRIMARY KEY,
     content_type ENUM('movie', 'tv') NOT NULL,
     title VARCHAR(255) NOT NULL, -- Mapea 'title' (movie) y 'name' (tv)
@@ -18,13 +23,13 @@ CREATE TABLE contents (
 );
 
 -- 2. Tabla de Géneros (Catálogo estático de TMDB)
-CREATE TABLE genres (
+CREATE TABLE IF NOT EXISTS genres (
     id INT PRIMARY KEY,
     name VARCHAR(50) NOT NULL
 );
 
 -- 3. Relación Muchos a Muchos (Un contenido puede tener varios géneros)
-CREATE TABLE content_genres (
+CREATE TABLE IF NOT EXISTS content_genres (
     content_id INT,
     genre_id INT,
     PRIMARY KEY (content_id, genre_id),
@@ -39,6 +44,8 @@ CREATE TABLE users (
     email VARCHAR(100) UNIQUE NOT NULL,
     passwd VARCHAR(255) NOT NULL, -- Recuerda guardar hashes, no texto plano
     fecha_nacimiento DATE,
+    sexo ENUM('Hombre', 'Mujer', 'Otro'),
+    role ENUM('admin', 'user') NOT NULL DEFAULT 'user',
     sexo ENUM('Hombre', 'Mujer', 'Otro'),
     role ENUM('admin', 'user') NOT NULL DEFAULT 'user',
     fecha_registro TIMESTAMP DEFAULT CURRENT_TIMESTAMP

@@ -294,6 +294,7 @@ class KNNRecommenderTopN:
         rerank_alpha: float = 0.7,
         popularity_weight: float = 0.3,
         genre_weight: float = 0.7,
+        seen_tmdb_ids_override: Optional[set[int]] = None,
     ) -> List[Dict[str, object]]:
         """
         Devuelve un ranking top-N para un userId.
@@ -313,7 +314,19 @@ class KNNRecommenderTopN:
 
         # Ítems ya vistos
         user_row = self.user_item_matrix.getrow(user_idx)
-        seen_item_indices = set(user_row.indices.tolist())
+        if seen_tmdb_ids_override is None:
+            seen_item_indices = set(user_row.indices.tolist())
+        else:
+            # Permite evaluar con holdout: excluimos solo lo "visible" para evitar
+            # que el modelo descarte también los ítems ocultos del ground truth.
+            seen_item_indices = set()
+            for tmdb_id in seen_tmdb_ids_override:
+                try:
+                    seen_item_indices.add(
+                        int(self.item_encoder.transform([int(tmdb_id)])[0])
+                    )
+                except Exception:
+                    continue
         if user_row.nnz == 0:
             return self._cold_start(raw_user_id, top_n=top_n)
 

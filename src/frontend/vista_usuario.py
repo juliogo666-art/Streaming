@@ -333,7 +333,7 @@ def render():
             )
 
     # 3. Barra de búsqueda general
-    texto_busqueda = st.text_input("Busca por título...", key="input_busqueda_usuario")
+    # texto_busqueda = st.text_input("Busca por título...", key="input_busqueda_usuario")
 
     # 4. Carga de los catálogos de películas y series
     datos_peliculas, datos_series = cargar_datos_catalogo()
@@ -1072,9 +1072,7 @@ def dibujar_contenido_pestana(
 
     año_min_cat, año_max_cat = rango_anos_desde_catalogo(dataframe, columna_fecha)
     ids_cat = sorted(ids_generos_presentes_en_catalogo(dataframe))
-    etiquetas_genero = [
-        TMDB_GENRE_NAMES.get(i, f"Género ({i})") for i in ids_cat
-    ]
+    etiquetas_genero = [TMDB_GENRE_NAMES.get(i, f"Género ({i})") for i in ids_cat]
     mapa_etiqueta_a_id = dict(zip(etiquetas_genero, ids_cat))
 
     with st.form(f"form_buscar_catalogo_{prefijo_tipo}"):
@@ -1130,7 +1128,9 @@ def dibujar_contenido_pestana(
 
     if pulsado_buscar:
         texto_limpio = (texto_titulo or "").strip()
-        ids_genero = [mapa_etiqueta_a_id[g] for g in generos_elegidos if g in mapa_etiqueta_a_id]
+        ids_genero = [
+            mapa_etiqueta_a_id[g] for g in generos_elegidos if g in mapa_etiqueta_a_id
+        ]
         año_lo, año_hi = rango_año
         filtro_año_activo = filtro_por_año_posible and (año_lo, año_hi) != (
             año_min_cat,
@@ -1249,7 +1249,22 @@ def dibujar_contenido_pestana(
 # ##############################################################################
 
 # Símbolos para la animación de tragaperras
-_SLOT_SYMBOLS = ["🎬", "🎭", "🎪", "🎨", "🎥", "🎞️", "⭐", "🔮", "🎯", "🌟", "💫", "✨", "🏆", "🎖️"]
+_SLOT_SYMBOLS = [
+    "🎬",
+    "🎭",
+    "🎪",
+    "🎨",
+    "🎥",
+    "🎞️",
+    "⭐",
+    "🔮",
+    "🎯",
+    "🌟",
+    "💫",
+    "✨",
+    "🏆",
+    "🎖️",
+]
 
 
 def _html_tragaperras_frame(simbolos: list, fase: str = "spinning") -> str:
@@ -1283,29 +1298,29 @@ def _html_tragaperras_frame(simbolos: list, fase: str = "spinning") -> str:
 
     reels = "".join(
         f'<div style="background:{reel_bg};border:3px solid {border_color};'
-        f'border-radius:12px;padding:20px 24px;font-size:3.6rem;text-align:center;'
+        f"border-radius:12px;padding:20px 24px;font-size:3.6rem;text-align:center;"
         f'min-width:100px;{glow_css};{sym_style}">{s}</div>'
         for s in simbolos
     )
 
     machine_frame = (
         f'<div style="background:linear-gradient(180deg,#1a0a00 0%,#0d0500 100%);'
-        f'border:3px solid #3a2200;border-radius:20px;padding:24px 28px;'
+        f"border:3px solid #3a2200;border-radius:20px;padding:24px 28px;"
         f'display:inline-block;box-shadow:0 8px 40px rgba(0,0,0,0.8),inset 0 1px 0 rgba(255,200,0,0.15);">'
         f'<div style="display:flex;align-items:center;gap:14px;">'
-        f'{sprocket_strip}'
+        f"{sprocket_strip}"
         f'<div style="display:flex;gap:14px;">{reels}</div>'
-        f'{sprocket_strip}'
-        f'</div>'
-        f'</div>'
+        f"{sprocket_strip}"
+        f"</div>"
+        f"</div>"
     )
 
     return (
         f'<div style="text-align:center;padding:28px 0;">'
         f'<div style="font-size:1.1rem;color:{label_color};margin-bottom:20px;'
         f'font-weight:700;letter-spacing:0.12em;text-transform:uppercase;">{label}</div>'
-        f'{machine_frame}'
-        f'</div>'
+        f"{machine_frame}"
+        f"</div>"
     )
 
 
@@ -1488,7 +1503,9 @@ def _tarjeta_serendipia_html(
     titulo_corto = titulo[:35] + "..." if len(titulo) > 35 else titulo
     titulo_safe = _escapar_html(titulo)
     sinopsis_safe = _escapar_html(
-        overview[:300] + "..." if overview and len(overview) > 300 else (overview or "Sin sinopsis disponible.")
+        overview[:300] + "..."
+        if overview and len(overview) > 300
+        else (overview or "Sin sinopsis disponible.")
     )
     año_html = (
         f"<span style='color:#aaa;font-weight:400;font-size:0.85rem;'>({año})</span>"
@@ -1561,7 +1578,9 @@ def render_tragaperras(id_usuario):
     if tirar:
         st.session_state["serendipia_resultado"] = None
         # Incrementar generación para forzar widgets de estrellas completamente nuevos
-        st.session_state["serendipia_gen"] = st.session_state.get("serendipia_gen", 0) + 1
+        st.session_state["serendipia_gen"] = (
+            st.session_state.get("serendipia_gen", 0) + 1
+        )
 
         anim_slot = st.empty()
 
@@ -1649,7 +1668,11 @@ def render_tragaperras(id_usuario):
 
     cols = st.columns(3)
     # Cargar valoraciones una sola vez (fuera del bucle)
-    valoraciones_usuario = _cargar_valoraciones_usuario(id_usuario) if id_usuario and id_usuario != "?" else {}
+    valoraciones_usuario = (
+        _cargar_valoraciones_usuario(id_usuario)
+        if id_usuario and id_usuario != "?"
+        else {}
+    )
 
     for idx, rec in enumerate(recomendaciones):
         movie_id = rec.get("movie_id")
@@ -1741,4 +1764,6 @@ def render_tragaperras(id_usuario):
             movie_id_int = int(movie_id) if movie_id and pd.notna(movie_id) else 0
             if movie_id_int and id_usuario and id_usuario != "?":
                 if st.button("Info", key=f"slot_info_{idx}"):
-                    _mostrar_dialog_detalle(movie_id_int, id_usuario, valoraciones_usuario)
+                    _mostrar_dialog_detalle(
+                        movie_id_int, id_usuario, valoraciones_usuario
+                    )

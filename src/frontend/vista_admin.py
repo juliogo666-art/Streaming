@@ -602,8 +602,13 @@ def _render_recomendaciones_ia(
                 f"Gateway Backend bloqueado / indisponible. Motivo explícito de Uvicorn: {explicativo_error}"
             )
         else:
+            # Mostrar el código real y el cuerpo de respuesta para diagnosticar
+            try:
+                detalle_error = respuesta_red_api.json().get("detail", respuesta_red_api.text[:200])
+            except Exception:
+                detalle_error = respuesta_red_api.text[:200]
             st.warning(
-                "Excepción y fallo HTTP No Gestionado (Posiblemente puerto 8000 denegado/caído)."
+                f"Error HTTP {respuesta_red_api.status_code}: {detalle_error}"
             )
 
     # Filtro contra apagon repentino de server backend FastAPI (Imposibilidad de Networking hacia localhost loopback)

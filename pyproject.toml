@@ -20,7 +20,10 @@ dependencies = [
     "onnxruntime>=1.24.4",
     "onnxscript>=0.5.0",
     "pipelines>=0.0.1",
+    "psutil>=7.2.2",
     "pydantic>=2.12.5",
+    "pytest>=9.0.3",
+    "pytest-cov>=7.1.0",
     "requests>=2.32.5",
     "scikit-learn>=1.8.0",
     "scikit-surprise>=1.1.4",
@@ -38,3 +41,42 @@ dev = [
     "httpx>=0.28.1",
     "pytest>=9.0.3",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["test"]
+pythonpath = ["."]
+addopts = "-v --tb=short --ignore=test/test_api.py --ignore=test/test_serendipia.py"
+markers = [
+    "integration: Tests que requieren BD y modelos cargados (test_api, test_serendipia)",
+]
+
+[tool.coverage.run]
+source = ["src"]
+omit = [
+    # Scripts standalone (limpieza, EDA, migración, descarga, subida)
+    "src/scripts/*",
+    "src/utils/download_*.py",
+    "src/utils/exportar_onnx.py",
+    "src/utils/evaluacion_ranking.py",
+    # Frontend Streamlit (no testeable unitariamente)
+    "src/frontend/*",
+    # Definiciones de redes neuronales (se validan via modelos exportados)
+    "src/networks/*",
+    # Cron jobs (requieren BD en producción)
+    "src/serendipia/actualizar_cache_cron.py",
+    # Routers de la API (tests de integración, requieren BD + modelos)
+    "src/api/routers/*",
+    "src/api/database.py",
+    "src/api/main_api.py",
+    "src/api/etl.py",
+    # Config (solo constantes)
+    "src/config/*",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.",
+    "pass",
+]
+show_missing = true

@@ -1,5 +1,6 @@
 import mysql.connector
 from mysql.connector import pooling
+from contextlib import contextmanager
 import os
 from dotenv import load_dotenv
 
@@ -23,3 +24,21 @@ conexion_pool = pooling.MySQLConnectionPool(pool_name="mypool", pool_size=5, **d
 
 def get_db_connection():
     return conexion_pool.get_connection()
+
+
+@contextmanager
+def db_connection():
+    """Context manager que garantiza la devolución de la conexión al pool.
+
+    Uso:
+        with db_connection() as conn:
+            cursor = conn.cursor(dictionary=True)
+            cursor.execute("SELECT ...")
+            ...
+            cursor.close()
+    """
+    conn = conexion_pool.get_connection()
+    try:
+        yield conn
+    finally:
+        conn.close()

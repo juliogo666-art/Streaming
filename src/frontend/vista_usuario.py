@@ -15,8 +15,7 @@ import requests
 import pandas as pd
 import streamlit as st
 
-# URL base para la API del recomendador. Idealmente esto debería venir de una variable de entorno.
-API_BASE_URL = "http://127.0.0.1:8000"
+from src.config.settings import API_BASE_URL
 
 
 # ##############################################################################
@@ -1182,6 +1181,8 @@ def dibujar_contenido_pestana(
                 limite_mostrar=30,
                 prefijo_clave=f"{prefijo_tipo}_search",
                 columna_fecha=columna_fecha,
+                id_usuario=identificador_usuario,
+                valoraciones_usuario=valoraciones_usuario,
             )
         return
 

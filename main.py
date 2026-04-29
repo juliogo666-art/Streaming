@@ -89,11 +89,12 @@ def verificar_datos():
 
 
 ########################################################################################
-# Main
+# Main (unificado)
 ########################################################################################
 
 
-def main():
+def main(debug: bool = False):
+    """Punto de entrada principal. Con debug=True muestra mensajes extra."""
     # Obtener el root
     ruta_raiz = os.getcwd()
     env_config = os.environ.copy()
@@ -104,6 +105,9 @@ def main():
 
     # 0.5 Verificar y descargar datos si faltan
     verificar_datos()
+
+    if debug:
+        print("Iniciando Debug de Backend...")
 
     # 1. Lanzar el Backend (FastAPI)
     backend = subprocess.Popen(
@@ -116,6 +120,9 @@ def main():
     if backend.poll() is not None:
         print("El backend terminó al arrancar. Revisa el error mostrado en consola.")
         return
+
+    if debug:
+        print("Iniciando Debug de Frontend...")
 
     # 3. Lanzar el Frontend (Streamlit)
     frontend = subprocess.Popen(
@@ -147,69 +154,8 @@ def main():
 
 
 ########################################################################################
-# Main Debug
-########################################################################################
-
-
-def main_debug():
-    # Obtenemos la ruta raíz del proyecto
-    ruta_raiz = os.getcwd()
-
-    # Preparar el entorno para que los subprocesos vean el proyecto completo
-    env_config = os.environ.copy()
-    env_config["PYTHONPATH"] = ruta_raiz
-
-    # 0. Verificar y descargar modelos si faltan
-    verificar_modelos()
-
-    # 0.5 Verificar y descargar datos si faltan
-    verificar_datos()
-
-    print("Iniciando Debug de Backend...")
-    # Usar el root como base para que los imports relativos de 'src' funcionen
-    backend = subprocess.Popen(
-        [sys.executable, "-m", "uvicorn", "src.api.main_api:app"],
-        env=env_config,
-    )
-
-    time.sleep(3)
-    if backend.poll() is not None:
-        print("El backend terminó al arrancar. Revisa el error mostrado en consola.")
-        return
-
-    print("Iniciando Debug de Frontend...")
-    frontend = subprocess.Popen(
-        [sys.executable, "-m", "streamlit", "run", "src/frontend/app_ui.py"],
-        env=env_config,
-    )
-
-    try:
-        import requests
-        while True:
-            if backend.poll() is not None or frontend.poll() is not None:
-                break
-            
-            try:
-                r = requests.get("http://127.0.0.1:8000/api/heartbeat_status", timeout=2)
-                if r.status_code == 200 and r.json().get("seconds_since_last", 0) > 15:
-                    print("\n[Watchdog] El navegador se ha cerrado (Timeout). Terminando procesos...")
-                    break
-            except Exception:
-                pass
-            
-            time.sleep(3)
-    except KeyboardInterrupt:
-        pass
-    finally:
-        print("Cerrando procesos...")
-        backend.terminate()
-        frontend.terminate()
-
-
-########################################################################################
-# Verificación y descarga de modelos
+# Punto de entrada
 ########################################################################################
 
 if __name__ == "__main__":
-    # main()
-    main_debug()
+    main(debug=True)

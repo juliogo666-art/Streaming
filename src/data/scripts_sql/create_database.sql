@@ -32,24 +32,14 @@ CREATE TABLE content_genres (
     FOREIGN KEY (genre_id) REFERENCES genres(id) ON DELETE CASCADE
 );
 
--- 4. Tabla Unificada de Estadísticas
-CREATE TABLE content_stats (
-    content_id INT PRIMARY KEY,
-    certificacion VARCHAR(10),
-    espectadores_live INT DEFAULT 0,
-    reproducciones_totales INT DEFAULT 0,
-    es_tendencia BOOLEAN DEFAULT FALSE,
-    es_popular BOOLEAN DEFAULT FALSE,
-    es_historico_vistas BOOLEAN DEFAULT FALSE,
-    FOREIGN KEY (content_id) REFERENCES contents(tmdb_id) ON DELETE CASCADE
-);
-
--- 5. Tabla de Usuarios
+-- 4. Tabla de Usuarios (misma definición que en setup_completo.sql; ids desde 500000)
 CREATE TABLE users (
     id_usuario INT AUTO_INCREMENT PRIMARY KEY,
     username VARCHAR(50) UNIQUE NOT NULL,
     email VARCHAR(100) UNIQUE NOT NULL,
     passwd VARCHAR(255) NOT NULL, -- Recuerda guardar hashes, no texto plano
     fecha_nacimiento DATE,
+    sexo ENUM('Hombre', 'Mujer', 'Otro'),
+    role ENUM('admin', 'user') NOT NULL DEFAULT 'user',
     fecha_registro TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
+) AUTO_INCREMENT=500000;

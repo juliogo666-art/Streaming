@@ -328,10 +328,13 @@ def _obtener_tx_svd_cs_payload():
 
     try:
         from src.models.tx.model_SVD_CS import cargar_modelo_guardado
+
         print("  Cargando modelo tx/SVD+CS...")
         payload = cargar_modelo_guardado()
         if payload is None:
-            print("  [WARN] Modelo tx/SVD+CS no disponible. Se omitirá en la evaluación.")
+            print(
+                "  [WARN] Modelo tx/SVD+CS no disponible. Se omitirá en la evaluación."
+            )
             _tx_svd_cs_payload_cache = _TX_NO_DISPONIBLE
             return None
         _tx_svd_cs_payload_cache = payload
@@ -452,7 +455,16 @@ def evaluar():
     # Incluimos TX_SVD_CS para evaluar el modelo de tx/ junto a los demás
     respuestas_de_la_ia = {
         m: {}
-        for m in ["SVD", "KNN", "WND_ONNX", "TFIDF_MAT", "IMP", "NCF_ONNX", "TT_ONNX", "TX_SVD_CS"]
+        for m in [
+            "SVD",
+            "KNN",
+            "WND_ONNX",
+            "TFIDF_MAT",
+            "IMP",
+            "NCF_ONNX",
+            "TT_ONNX",
+            "TX_SVD_CS",
+        ]
     }
 
     print(

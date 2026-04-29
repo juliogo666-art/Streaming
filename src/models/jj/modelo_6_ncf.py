@@ -56,11 +56,11 @@ RUTA_ITEM2IDX = "artifacts/mappings/ncf_item2idx.json"
 
 # Hiperparámetros
 EMB_DIM = 32  # Dimensión de los embeddings
-BATCH_SIZE = 2048  # Tamaño de lote
+BATCH_SIZE = 4096  # Tamaño de lote (optimizado para GPU RTX 5060 8GB)
 EPOCHS = 5  # Épocas de entrenamiento
 NEG_SAMPLES = 4  # Negativos por cada positivo (pairwise learning)
 LEARNING_RATE = 1e-3  # Learning rate de Adam
-MIN_RATINGS_USER = 200  # Umbral K-Core para usuarios
+MIN_RATINGS_USER = 100  # Umbral K-Core para usuarios
 MIN_RATINGS_ITEM = 100  # Umbral K-Core para items
 
 # Dispositivo de cómputo
@@ -344,8 +344,8 @@ if __name__ == "__main__":
         dataset,
         batch_size=BATCH_SIZE,
         shuffle=True,
-        num_workers=0,  # 0 para compatibilidad Windows
-        pin_memory=False,
+        num_workers=2,  # Precarga paralela (i9 alimenta la GPU sin cuellos de botella)
+        pin_memory=True,  # Transferencia CPU→GPU acelerada con CUDA
     )
     print(
         f"  Dataset: {len(df):,} interacciones x {NEG_SAMPLES} negativos = {len(dataset):,} muestras"

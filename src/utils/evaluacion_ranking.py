@@ -310,6 +310,7 @@ def predecir_implicit(modelo, datos, user_id, candidatas):
 
 # Variables globales para reutilizar el modelo tx/ sin recargarlo por cada usuario
 _tx_svd_cs_payload_cache = None
+_TX_NO_DISPONIBLE = "_UNAVAILABLE"
 
 
 def _obtener_tx_svd_cs_payload():
@@ -320,6 +321,8 @@ def _obtener_tx_svd_cs_payload():
       - trainset (mapeos raw_id <-> inner_id)
     """
     global _tx_svd_cs_payload_cache
+    if _tx_svd_cs_payload_cache is _TX_NO_DISPONIBLE:
+        return None
     if _tx_svd_cs_payload_cache is not None:
         return _tx_svd_cs_payload_cache
 
@@ -328,12 +331,15 @@ def _obtener_tx_svd_cs_payload():
         print("  Cargando modelo tx/SVD+CS...")
         payload = cargar_modelo_guardado()
         if payload is None:
+            print("  [WARN] Modelo tx/SVD+CS no disponible. Se omitirá en la evaluación.")
+            _tx_svd_cs_payload_cache = _TX_NO_DISPONIBLE
             return None
         _tx_svd_cs_payload_cache = payload
         print("  Modelo tx/SVD+CS cargado correctamente.")
         return _tx_svd_cs_payload_cache
     except Exception as e:
         print(f"  [ERROR] No se pudo cargar el modelo tx/SVD+CS: {e}")
+        _tx_svd_cs_payload_cache = _TX_NO_DISPONIBLE
         return None
 
 

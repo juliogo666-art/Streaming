@@ -171,6 +171,10 @@ def _render_tab_eda():
     archivo_grafico_distribucion_stars = os.path.join(
         CARPETA_SOPORTE_EDA, "distribucion_puntuaciones.png"
     )
+    archivo_grafico_genero = os.path.join(
+        CARPETA_SOPORTE_EDA, "top_generos_catalogo.png"
+    )
+    archivo_smart_group = os.path.join(CARPETA_SOPORTE_EDA, "smart_selector_grupos.png")
 
     # Este manifiesto adjunta contadores importantes exportados por Pandas al generar las gráficas
     archivo_json_metricas_estaticas = os.path.join(CARPETA_SOPORTE_EDA, "metricas.json")
@@ -245,6 +249,12 @@ def _render_tab_eda():
         st.caption(
             f"Conjunto algoritmico congelado el: {formato_fecha_legible} · Para generar modelo actualizado ejecute `generar_eda_charts`."
         )
+
+        st.markdown("### Conteo total de Géneros de Películas Disponibles")
+        st.image(archivo_grafico_genero, use_container_width=True)
+
+        st.markdown("### Segmentación Inteligente de Audiencias por Affinidad")
+        st.image(archivo_smart_group, use_container_width=True)
 
 
 # ##############################################################################
@@ -604,12 +614,12 @@ def _render_recomendaciones_ia(
         else:
             # Mostrar el código real y el cuerpo de respuesta para diagnosticar
             try:
-                detalle_error = respuesta_red_api.json().get("detail", respuesta_red_api.text[:200])
+                detalle_error = respuesta_red_api.json().get(
+                    "detail", respuesta_red_api.text[:200]
+                )
             except Exception:
                 detalle_error = respuesta_red_api.text[:200]
-            st.warning(
-                f"Error HTTP {respuesta_red_api.status_code}: {detalle_error}"
-            )
+            st.warning(f"Error HTTP {respuesta_red_api.status_code}: {detalle_error}")
 
     # Filtro contra apagon repentino de server backend FastAPI (Imposibilidad de Networking hacia localhost loopback)
     except requests.exceptions.ConnectionError:

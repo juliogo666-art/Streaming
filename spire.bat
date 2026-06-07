@@ -1,5 +1,5 @@
 @echo off
-title Lanzador Galeno
+title Lanzador SPIRE
 setlocal
 
 :: 1. Entramos en la carpeta del proyecto
